@@ -1,0 +1,22 @@
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9999/realms/teste
+          jwk-set-uri: http://localhost:9999/realms/teste/protocol/openid-connect/certs
+
+contextpilot:
+  ingestao:
+    atraso-inicial-ms: 600000
+    intervalo-ms: 600000
+
+management:
+  tracing:
+    sampling:
+      probability: 0.0
+
+logging:
+  level:
+    root: WARN
+    br.com.contextpilot: INFO

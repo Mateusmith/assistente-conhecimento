@@ -1,0 +1,43 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Consultas RAG respondidas",
+      "targets": [{"expr": "sum(contextpilot_rag_consultas_total{resultado=\"respondida\"})", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Recusas seguras",
+      "targets": [{"expr": "sum(contextpilot_rag_consultas_total{resultado=\"recusa\"})", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Ingestoes com sucesso",
+      "targets": [{"expr": "sum(contextpilot_ingestao_total{resultado=\"sucesso\"})", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Latencia RAG p95",
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(contextpilot_rag_latencia_seconds_bucket[5m])) by (le))", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6}
+    },
+    {
+      "type": "timeseries",
+      "title": "Requisicoes HTTP",
+      "targets": [{"expr": "sum(rate(http_server_requests_seconds_count[5m])) by (status)", "legendFormat": "{{status}}", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6}
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["contextpilot", "rag", "java"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "ContextPilot - Operacao",
+  "uid": "contextpilot-operacao",
+  "version": 1
+}

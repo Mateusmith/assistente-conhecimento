@@ -1,0 +1,94 @@
+services:
+  banco:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-contextpilot}
+      POSTGRES_USER: ${POSTGRES_USER:-contextpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-contextpilot_local}
+    ports:
+      - "54326:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - dados-banco:/var/lib/postgresql/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1.4
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    ports:
+      - "18084:8080"
+    volumes:
+      - ./docker/keycloak/contextpilot-realm.json:/opt/keycloak/data/import/contextpilot-realm.json:ro
+
+  aplicacao:
+    build: .
+    environment:
+      SERVER_PORT: 8080
+      DATABASE_URL: jdbc:postgresql://banco:5432/${POSTGRES_DB:-contextpilot}
+      DATABASE_USER: ${POSTGRES_USER:-contextpilot}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-contextpilot_local}
+      JWT_ISSUER_URI: http://localhost:18084/realms/contextpilot
+      JWT_JWK_SET_URI: http://keycloak:8080/realms/contextpilot/protocol/openid-connect/certs
+      CONTEXT_PILOT_PROVEDOR_IA: ${CONTEXT_PILOT_PROVEDOR_IA:-local}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CONTEXT_PILOT_MODELO_CHAT: ${CONTEXT_PILOT_MODELO_CHAT:-gpt-5-mini}
+      CONTEXT_PILOT_MODELO_EMBEDDING: ${CONTEXT_PILOT_MODELO_EMBEDDING:-text-embedding-3-small}
+      OBSERVABILITY_USER: ${OBSERVABILITY_USER:-prometheus}
+      OBSERVABILITY_PASSWORD: ${OBSERVABILITY_PASSWORD:-contextpilot_metrics_local}
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+    ports:
+      - "8083:8080"
+    depends_on:
+      banco:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      zipkin:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 8s
+      timeout: 4s
+      retries: 30
+      start_period: 25s
+
+  zipkin:
+    image: openzipkin/zipkin:3.5.1
+    ports:
+      - "19411:9411"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["observability"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    ports:
+      - "19093:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      aplicacao:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin_contextpilot}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "13003:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  dados-banco:

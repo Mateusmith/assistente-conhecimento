@@ -1,0 +1,64 @@
+{
+  "realm": "contextpilot",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "contextpilot-postman",
+      "name": "ContextPilot - Postman",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false
+    },
+    {
+      "clientId": "contextpilot-swagger",
+      "name": "ContextPilot - Swagger",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": true,
+      "redirectUris": ["http://localhost:8083/swagger-ui/oauth2-redirect.html"],
+      "webOrigins": ["http://localhost:8083"],
+      "attributes": {"pkce.code.challenge.method": "S256"}
+    },
+    {
+      "clientId": "contextpilot-mcp",
+      "name": "ContextPilot - MCP",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "ana",
+      "enabled": true,
+      "email": "ana@contextpilot.local",
+      "emailVerified": true,
+      "firstName": "Ana",
+      "lastName": "Administradora",
+      "credentials": [{"type": "password", "value": "context123", "temporary": false}]
+    },
+    {
+      "username": "bruno",
+      "enabled": true,
+      "email": "bruno@contextpilot.local",
+      "emailVerified": true,
+      "firstName": "Bruno",
+      "lastName": "Curador",
+      "credentials": [{"type": "password", "value": "context123", "temporary": false}]
+    },
+    {
+      "username": "carla",
+      "enabled": true,
+      "email": "carla@contextpilot.local",
+      "emailVerified": true,
+      "firstName": "Carla",
+      "lastName": "Leitora",
+      "credentials": [{"type": "password", "value": "context123", "temporary": false}]
+    }
+  ]
+}

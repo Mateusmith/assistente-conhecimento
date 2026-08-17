@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: contextpilot
+    metrics_path: /actuator/prometheus
+    basic_auth:
+      username: prometheus
+      password: contextpilot_metrics_local
+    static_configs:
+      - targets: ["aplicacao:8080"]

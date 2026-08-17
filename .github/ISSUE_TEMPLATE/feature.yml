@@ -1,0 +1,27 @@
+name: Propor melhoria
+description: Nova capacidade orientada por problema e criterio de aceite
+title: "[Melhoria]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: contexto
+    attributes:
+      label: Problema ou oportunidade
+    validations:
+      required: true
+  - type: textarea
+    id: proposta
+    attributes:
+      label: Resultado desejado
+    validations:
+      required: true
+  - type: textarea
+    id: aceite
+    attributes:
+      label: Criterios de aceite
+    validations:
+      required: true
+  - type: textarea
+    id: riscos
+    attributes:
+      label: Impactos de seguranca e operacao
