@@ -12,6 +12,7 @@ import java.util.UUID;
 import br.com.contextpilot.audit.AuditService;
 import br.com.contextpilot.document.DocumentModels.ConcederPermissaoRequest;
 import br.com.contextpilot.document.DocumentModels.DocumentoResponse;
+import br.com.contextpilot.document.DocumentModels.ResultadoAntivirus;
 import br.com.contextpilot.document.DocumentModels.EstadoDocumento;
 import br.com.contextpilot.document.DocumentModels.VisibilidadeDocumento;
 import br.com.contextpilot.shared.domain.BusinessRuleException;
@@ -21,14 +22,21 @@ import br.com.contextpilot.workspace.WorkspaceAccessService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class DocumentService {
 
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DocumentService.class);
+
     private final DocumentRepository repositorio;
     private final WorkspaceAccessService acessoEspaco;
     private final AuditService auditoria;
+    private final ObjectStorage objetos;
+    private final DocumentContentStorage conteudos;
+    private final MalwareScanner antivirus;
     private final Clock relogio;
     private final long tamanhoMaximo;
 
@@ -36,11 +44,17 @@ public class DocumentService {
             DocumentRepository repositorio,
             WorkspaceAccessService acessoEspaco,
             AuditService auditoria,
+            ObjectStorage objetos,
+            DocumentContentStorage conteudos,
+            MalwareScanner antivirus,
             Clock relogio,
             @Value("${contextpilot.documentos.tamanho-maximo-bytes}") long tamanhoMaximo) {
         this.repositorio = repositorio;
         this.acessoEspaco = acessoEspaco;
         this.auditoria = auditoria;
+        this.objetos = objetos;
+        this.conteudos = conteudos;
+        this.antivirus = antivirus;
         this.relogio = relogio;
         this.tamanhoMaximo = tamanhoMaximo;
     }
@@ -64,10 +78,21 @@ public class DocumentService {
 
         UUID documentoId = UUID.randomUUID();
         String nomeArquivo = normalizarNome(arquivo.getOriginalFilename(), tipoMime);
+        var verificacao = antivirus.verificar(conteudo, nomeArquivo);
+        Instant agora = Instant.now(relogio);
+        ResultadoAntivirus resultadoAntivirus = verificacao.verificado()
+                ? ResultadoAntivirus.LIMPO : ResultadoAntivirus.NAO_VERIFICADO;
+        Instant verificadoEm = verificacao.verificado() ? agora : null;
+        String chaveArmazenamento = "espacos/%s/documentos/%s/%s".formatted(espacoId, documentoId, hash);
+
+        objetos.armazenar(chaveArmazenamento, conteudo, tipoMime, hash);
+        removerObjetoSeTransacaoFalhar(chaveArmazenamento);
         repositorio.criar(documentoId, espacoId, titulo.trim(), nomeArquivo, tipoMime,
-                visibilidade, hash, conteudo, usuarioId, Instant.now(relogio));
+                visibilidade, hash, chaveArmazenamento, conteudo.length, resultadoAntivirus,
+                verificadoEm, usuarioId, agora);
         auditoria.registrar(espacoId, usuarioId, "DOCUMENTO_ENVIADO", "DOCUMENTO", documentoId.toString(),
-                Map.of("titulo", titulo.trim(), "tipoMime", tipoMime, "tamanhoBytes", conteudo.length));
+                Map.of("titulo", titulo.trim(), "tipoMime", tipoMime, "tamanhoBytes", conteudo.length,
+                        "armazenamento", "S3", "antivirus", verificacao.motor()));
 
         return buscar(espacoId, documentoId, usuarioId);
     }
@@ -85,8 +110,9 @@ public class DocumentService {
 
     public byte[] baixar(UUID espacoId, UUID documentoId, String usuarioId) {
         buscar(espacoId, documentoId, usuarioId);
-        return repositorio.obterConteudo(documentoId)
+        var referencia = repositorio.obterReferenciaConteudo(documentoId)
                 .orElseThrow(() -> new ResourceNotFoundException("Conteudo do documento nao encontrado."));
+        return conteudos.obter(referencia);
     }
 
     @Transactional
@@ -175,5 +201,25 @@ public class DocumentService {
         if (titulo == null || titulo.trim().length() < 3 || titulo.trim().length() > 180) {
             throw new BusinessRuleException("O titulo deve ter entre 3 e 180 caracteres.");
         }
+    }
+
+    private void removerObjetoSeTransacaoFalhar(String chaveArmazenamento) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            objetos.remover(chaveArmazenamento);
+            throw new IllegalStateException("O upload precisa ser executado dentro de uma transacao.");
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_COMMITTED) {
+                    return;
+                }
+                try {
+                    objetos.remover(chaveArmazenamento);
+                } catch (RuntimeException excecao) {
+                    logger.error("Falha ao compensar objeto {} apos rollback.", chaveArmazenamento, excecao);
+                }
+            }
+        });
     }
 }

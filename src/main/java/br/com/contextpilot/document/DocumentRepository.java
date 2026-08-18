@@ -11,7 +11,11 @@ import java.util.UUID;
 
 import br.com.contextpilot.document.DocumentModels.DocumentoParaIngestao;
 import br.com.contextpilot.document.DocumentModels.DocumentoResponse;
+import br.com.contextpilot.document.DocumentModels.ArmazenamentoDocumento;
 import br.com.contextpilot.document.DocumentModels.NivelPermissaoDocumento;
+import br.com.contextpilot.document.DocumentModels.OrigemTexto;
+import br.com.contextpilot.document.DocumentModels.ReferenciaConteudo;
+import br.com.contextpilot.document.DocumentModels.ResultadoAntivirus;
 import br.com.contextpilot.document.DocumentModels.TarefaIngestao;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -22,7 +26,8 @@ class DocumentRepository {
     private static final String SELECAO_DOCUMENTO = """
             SELECT d.id, d.espaco_id, d.titulo, d.nome_arquivo, d.tipo_mime, d.visibilidade,
                    d.estado, d.versao, d.tamanho_bytes, d.criado_por, d.criado_em,
-                   d.processado_em, d.erro_processamento
+                   d.processado_em, d.erro_processamento, d.armazenamento,
+                   d.resultado_antivirus, d.verificado_antivirus_em, d.origem_texto, d.paginas_ocr
               FROM documentos d
             """;
 
@@ -40,16 +45,21 @@ class DocumentRepository {
             String tipoMime,
             VisibilidadeDocumento visibilidade,
             String hash,
-            byte[] conteudo,
+            String chaveArmazenamento,
+            long tamanhoBytes,
+            ResultadoAntivirus resultadoAntivirus,
+            Instant verificadoAntivirusEm,
             String usuarioId,
             Instant instante) {
         banco.sql("""
                         INSERT INTO documentos
                             (id, espaco_id, titulo, nome_arquivo, tipo_mime, visibilidade, estado,
-                             hash_sha256, conteudo_original, tamanho_bytes, criado_por, criado_em)
+                             hash_sha256, armazenamento, chave_armazenamento, conteudo_original,
+                             tamanho_bytes, resultado_antivirus, verificado_antivirus_em, criado_por, criado_em)
                         VALUES
                             (:id, :espacoId, :titulo, :nomeArquivo, :tipoMime, :visibilidade, 'PENDENTE',
-                             :hash, :conteudo, :tamanho, :usuarioId, :instante)
+                             :hash, 'S3', :chaveArmazenamento, NULL,
+                             :tamanho, :resultadoAntivirus, :verificadoAntivirusEm, :usuarioId, :instante)
                         """)
                 .param("id", id)
                 .param("espacoId", espacoId)
@@ -58,8 +68,10 @@ class DocumentRepository {
                 .param("tipoMime", tipoMime)
                 .param("visibilidade", visibilidade.name())
                 .param("hash", hash)
-                .param("conteudo", conteudo)
-                .param("tamanho", conteudo.length)
+                .param("chaveArmazenamento", chaveArmazenamento)
+                .param("tamanho", tamanhoBytes)
+                .param("resultadoAntivirus", resultadoAntivirus.name())
+                .param("verificadoAntivirusEm", verificadoAntivirusEm == null ? null : instante(verificadoAntivirusEm))
                 .param("usuarioId", usuarioId)
                 .param("instante", instante(instante))
                 .update();
@@ -140,7 +152,8 @@ class DocumentRepository {
 
     Optional<DocumentoParaIngestao> buscarParaIngestao(UUID documentoId) {
         return banco.sql("""
-                        SELECT id, espaco_id, nome_arquivo, tipo_mime, conteudo_original
+                        SELECT id, espaco_id, nome_arquivo, tipo_mime, armazenamento,
+                               chave_armazenamento, conteudo_original
                           FROM documentos
                          WHERE id = :documentoId
                         """)
@@ -150,14 +163,18 @@ class DocumentRepository {
                         rs.getObject("espaco_id", UUID.class),
                         rs.getString("nome_arquivo"),
                         rs.getString("tipo_mime"),
-                        rs.getBytes("conteudo_original")))
+                        mapearReferencia(rs)))
                 .optional();
     }
 
-    Optional<byte[]> obterConteudo(UUID documentoId) {
-        return banco.sql("SELECT conteudo_original FROM documentos WHERE id = :documentoId")
+    Optional<ReferenciaConteudo> obterReferenciaConteudo(UUID documentoId) {
+        return banco.sql("""
+                        SELECT armazenamento, chave_armazenamento, conteudo_original
+                          FROM documentos
+                         WHERE id = :documentoId
+                        """)
                 .param("documentoId", documentoId)
-                .query(byte[].class)
+                .query((rs, linha) -> mapearReferencia(rs))
                 .optional();
     }
 
@@ -214,7 +231,7 @@ class DocumentRepository {
         }
     }
 
-    void concluir(TarefaIngestao tarefa, Instant instante) {
+    void concluir(TarefaIngestao tarefa, OrigemTexto origemTexto, int paginasOcr, Instant instante) {
         banco.sql("""
                         UPDATE tarefas_ingestao
                            SET estado = 'CONCLUIDA', finalizada_em = :instante
@@ -225,10 +242,13 @@ class DocumentRepository {
                 .update();
         banco.sql("""
                         UPDATE documentos
-                           SET estado = 'PRONTO', processado_em = :instante, erro_processamento = NULL
+                           SET estado = 'PRONTO', processado_em = :instante, erro_processamento = NULL,
+                               origem_texto = :origemTexto, paginas_ocr = :paginasOcr
                          WHERE id = :documentoId
                         """)
                 .param("documentoId", tarefa.documentoId())
+                .param("origemTexto", origemTexto.name())
+                .param("paginasOcr", paginasOcr)
                 .param("instante", instante(instante))
                 .update();
     }
@@ -300,6 +320,12 @@ class DocumentRepository {
                 rs.getString("titulo"),
                 rs.getString("nome_arquivo"),
                 rs.getString("tipo_mime"),
+                ArmazenamentoDocumento.valueOf(rs.getString("armazenamento")),
+                ResultadoAntivirus.valueOf(rs.getString("resultado_antivirus")),
+                rs.getTimestamp("verificado_antivirus_em") == null
+                        ? null : rs.getTimestamp("verificado_antivirus_em").toInstant(),
+                rs.getString("origem_texto") == null ? null : OrigemTexto.valueOf(rs.getString("origem_texto")),
+                rs.getInt("paginas_ocr"),
                 VisibilidadeDocumento.valueOf(rs.getString("visibilidade")),
                 EstadoDocumento.valueOf(rs.getString("estado")),
                 rs.getInt("versao"),
@@ -308,5 +334,12 @@ class DocumentRepository {
                 rs.getTimestamp("criado_em").toInstant(),
                 processadoEm == null ? null : processadoEm.toInstant(),
                 rs.getString("erro_processamento"));
+    }
+
+    private ReferenciaConteudo mapearReferencia(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new ReferenciaConteudo(
+                ArmazenamentoDocumento.valueOf(rs.getString("armazenamento")),
+                rs.getString("chave_armazenamento"),
+                rs.getBytes("conteudo_original"));
     }
 }

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "84a98c0e-8812-49f7-a108-7dff55c66612",
     "name": "Assistente de Conhecimento API",
-    "description": "Fluxo completo: autenticacao, ACL de documento, RAG citado, feedback, avaliacao e auditoria.",
+    "description": "Fluxo completo: autenticacao, ClamAV, MinIO, ingestao, ACL de documento, RAG citado, feedback, avaliacao e auditoria.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -23,7 +23,7 @@
           "name": "Token Ana",
           "request": {
             "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/x-www-form-urlencoded"}],
+            "header": [{"key": "Content-Type", "value": "application/x-www-form-urlencoded"}, {"key": "Host", "value": "localhost:18084"}],
             "body": {"mode": "urlencoded", "urlencoded": [
               {"key": "grant_type", "value": "password"},
               {"key": "client_id", "value": "contextpilot-postman"},
@@ -38,7 +38,7 @@
           "name": "Token Carla",
           "request": {
             "method": "POST",
-            "header": [{"key": "Content-Type", "value": "application/x-www-form-urlencoded"}],
+            "header": [{"key": "Content-Type", "value": "application/x-www-form-urlencoded"}, {"key": "Host", "value": "localhost:18084"}],
             "body": {"mode": "urlencoded", "urlencoded": [
               {"key": "grant_type", "value": "password"},
               {"key": "client_id", "value": "contextpilot-postman"},
@@ -86,12 +86,17 @@
             ]},
             "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/documentos"
           },
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento aceito', () => pm.response.to.have.status(201));", "pm.environment.set('documento_id', pm.response.json().id);"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento aceito', () => pm.response.to.have.status(201));", "const documento = pm.response.json();", "pm.test('Binario salvo no MinIO apos verificacao limpa', () => { pm.expect(documento.armazenamento).to.eql('S3'); pm.expect(documento.resultadoAntivirus).to.eql('LIMPO'); });", "pm.environment.set('documento_id', documento.id);"], "type": "text/javascript"}}]
         },
         {
           "name": "Consultar processamento",
           "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/documentos/{{documento_id}}"},
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento consultado', () => pm.response.to.have.status(200));", "pm.test('Ingestao concluida', () => pm.expect(pm.response.json().estado).to.eql('PRONTO'));"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento consultado', () => pm.response.to.have.status(200));", "pm.test('Ingestao nativa concluida', () => { const documento = pm.response.json(); pm.expect(documento.estado).to.eql('PRONTO'); pm.expect(documento.origemTexto).to.eql('NATIVO'); pm.expect(documento.paginasOcr).to.eql(0); });"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Baixar original do MinIO",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/documentos/{{documento_id}}/conteudo"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento recuperado', () => pm.response.to.have.status(200));", "pm.test('Conteudo original preservado', () => pm.expect(pm.response.text()).to.include('30 dias'));"], "type": "text/javascript"}}]
         }
       ]
     },

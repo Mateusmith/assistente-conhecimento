@@ -22,6 +22,7 @@ public class DocumentIngestionService {
 
     private final DocumentRepository repositorio;
     private final TextExtractor extrator;
+    private final DocumentContentStorage conteudos;
     private final TextChunker fragmentador;
     private final EmbeddingProvider embeddings;
     private final DocumentIngestionTransaction transacao;
@@ -31,6 +32,7 @@ public class DocumentIngestionService {
     public DocumentIngestionService(
             DocumentRepository repositorio,
             TextExtractor extrator,
+            DocumentContentStorage conteudos,
             TextChunker fragmentador,
             EmbeddingProvider embeddings,
             DocumentIngestionTransaction transacao,
@@ -38,6 +40,7 @@ public class DocumentIngestionService {
             Clock relogio) {
         this.repositorio = repositorio;
         this.extrator = extrator;
+        this.conteudos = conteudos;
         this.fragmentador = fragmentador;
         this.embeddings = embeddings;
         this.transacao = transacao;
@@ -63,17 +66,21 @@ public class DocumentIngestionService {
             repositorio.marcarDocumentoProcessando(tarefa.documentoId());
             var documento = repositorio.buscarParaIngestao(tarefa.documentoId())
                     .orElseThrow(() -> new IllegalStateException("Documento da tarefa nao foi encontrado."));
-            String texto = extrator.extrair(documento.tipoMime(), documento.conteudoOriginal());
-            List<String> trechos = fragmentador.dividir(texto);
+            byte[] conteudo = conteudos.obter(documento.referenciaConteudo());
+            var textoExtraido = extrator.extrair(documento.tipoMime(), conteudo);
+            List<String> trechos = fragmentador.dividir(textoExtraido.texto());
             List<String> vetores = trechos.stream()
                     .map(embeddings::gerar)
                     .map(VectorText::serializar)
                     .toList();
 
-            transacao.concluir(tarefa, documento.espacoId(), trechos, vetores);
+            transacao.concluir(tarefa, documento.espacoId(), trechos, vetores,
+                    textoExtraido.origem(), textoExtraido.paginasOcr());
             metricas.counter("contextpilot.ingestao.total", "resultado", "sucesso").increment();
-            logger.info("Documento {} indexado em {} trechos pelo provedor {}.",
-                    documento.id(), trechos.size(), embeddings.nome());
+            metricas.counter("contextpilot.extracao.total", "origem", textoExtraido.origem().name().toLowerCase())
+                    .increment();
+            logger.info("Documento {} indexado em {} trechos pelo provedor {} com extracao {}.",
+                    documento.id(), trechos.size(), embeddings.nome(), textoExtraido.origem());
         } catch (RuntimeException excecao) {
             transacao.falhar(tarefa, excecao);
             metricas.counter("contextpilot.ingestao.total", "resultado", "falha").increment();

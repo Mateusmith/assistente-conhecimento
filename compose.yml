@@ -26,6 +26,30 @@ services:
     volumes:
       - ./docker/keycloak/contextpilot-realm.json:/opt/keycloak/data/import/contextpilot-realm.json:ro
 
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-contextpilot}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-contextpilot_storage_local}
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    volumes:
+      - dados-objetos:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  antivirus:
+    image: clamav/clamav:1.5.3
+    ports:
+      - "13310:3310"
+    volumes:
+      - dados-antivirus:/var/lib/clamav
+
   aplicacao:
     build: .
     environment:
@@ -39,6 +63,16 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CONTEXT_PILOT_MODELO_CHAT: ${CONTEXT_PILOT_MODELO_CHAT:-gpt-5-mini}
       CONTEXT_PILOT_MODELO_EMBEDDING: ${CONTEXT_PILOT_MODELO_EMBEDDING:-text-embedding-3-small}
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+      OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-contextpilot}
+      OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-contextpilot_storage_local}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-documentos}
+      ANTIVIRUS_ENABLED: "true"
+      ANTIVIRUS_HOST: antivirus
+      ANTIVIRUS_PORT: 3310
+      OCR_ENABLED: "true"
+      OCR_LANGUAGES: ${OCR_LANGUAGES:-por+eng}
       OBSERVABILITY_USER: ${OBSERVABILITY_USER:-prometheus}
       OBSERVABILITY_PASSWORD: ${OBSERVABILITY_PASSWORD:-contextpilot_metrics_local}
       ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
@@ -49,6 +83,10 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
+      minio:
+        condition: service_healthy
+      antivirus:
+        condition: service_healthy
       zipkin:
         condition: service_healthy
     healthcheck:
@@ -92,3 +130,5 @@ services:
 
 volumes:
   dados-banco:
+  dados-objetos:
+  dados-antivirus:

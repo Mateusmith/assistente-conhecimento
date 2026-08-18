@@ -42,6 +42,29 @@ contextpilot:
     tamanho-maximo-bytes: 10485760
     tamanho-trecho: 1200
     sobreposicao: 180
+  armazenamento:
+    endpoint: ${OBJECT_STORAGE_ENDPOINT:http://localhost:19000}
+    regiao: ${OBJECT_STORAGE_REGION:us-east-1}
+    chave-acesso: ${OBJECT_STORAGE_ACCESS_KEY:contextpilot}
+    chave-secreta: ${OBJECT_STORAGE_SECRET_KEY:contextpilot_storage_local}
+    bucket: ${OBJECT_STORAGE_BUCKET:documentos}
+    acesso-por-caminho: ${OBJECT_STORAGE_PATH_STYLE:true}
+    criar-bucket: ${OBJECT_STORAGE_CREATE_BUCKET:true}
+    timeout: ${OBJECT_STORAGE_TIMEOUT:10s}
+  antivirus:
+    ativo: ${ANTIVIRUS_ENABLED:true}
+    host: ${ANTIVIRUS_HOST:localhost}
+    porta: ${ANTIVIRUS_PORT:13310}
+    tamanho-bloco: 65536
+    timeout-conexao: ${ANTIVIRUS_CONNECTION_TIMEOUT:3s}
+    timeout-leitura: ${ANTIVIRUS_READ_TIMEOUT:30s}
+  ocr:
+    ativo: ${OCR_ENABLED:true}
+    executavel: ${OCR_EXECUTABLE:tesseract}
+    idiomas: ${OCR_LANGUAGES:por+eng}
+    dpi: ${OCR_DPI:300}
+    maximo-paginas: ${OCR_MAX_PAGES:20}
+    timeout-por-pagina: ${OCR_PAGE_TIMEOUT:30s}
   busca:
     limite-fontes: 6
     pontuacao-minima: 0.12
@@ -53,7 +76,7 @@ contextpilot:
 
 spring.ai.mcp.server:
   name: assistente-conhecimento-mcp
-  version: 1.0.0
+  version: 1.1.0
   type: SYNC
   protocol: STATELESS
 

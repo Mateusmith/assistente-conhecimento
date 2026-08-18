@@ -18,6 +18,8 @@ Um chatbot corporativo simples pode recuperar um trecho que o usuario nao deveri
 - toda afirmacao entregue precisa apontar para marcadores como `[F1]`;
 - citacoes desconhecidas ou ausentes transformam a saida em recusa segura;
 - documentos sao deduplicados, versionados e processados por uma fila concorrente;
+- arquivos passam pelo ClamAV antes de chegar ao MinIO; se o antivirus estiver indisponivel, o upload e recusado;
+- PDFs sem camada de texto passam por OCR em portugues e ingles com Tesseract;
 - conjuntos de avaliacao medem termos, fontes e recusas esperadas;
 - auditoria registra alteracoes de acesso e consultas sem armazenar tokens;
 - o modo local permite demonstrar o projeto sem chave paga.
@@ -34,6 +36,9 @@ flowchart LR
     A --> G["Gerador local ou OpenAI"]
     A --> E["Avaliacoes e feedback"]
     D --> P[("PostgreSQL + pgvector")]
+    D --> C["ClamAV"]
+    D --> M["MinIO / S3"]
+    D --> T["PDFBox + Tesseract OCR"]
     R --> P
     E --> P
     A --> O["Prometheus / Grafana / Zipkin"]
@@ -44,8 +49,8 @@ O projeto e um monolito modular orientado por capacidades. JDBC explicito deixa 
 ## Fluxo RAG
 
 1. Um proprietario cria o espaco e adiciona curadores ou leitores.
-2. Um PDF, TXT ou Markdown e validado, identificado por SHA-256 e salvo como `PENDENTE`.
-3. Um trabalhador reivindica a tarefa sem bloquear outros trabalhadores, extrai o texto, cria trechos sobrepostos e gera embeddings.
+2. Um PDF, TXT ou Markdown e validado, identificado por SHA-256, aprovado pelo ClamAV e armazenado no MinIO.
+3. Um trabalhador reivindica a tarefa sem bloquear outros trabalhadores, extrai texto nativo ou usa OCR, cria trechos sobrepostos e gera embeddings.
 4. A pergunta gera um embedding e executa busca semantica + busca textual em portugues.
 5. O SQL considera apenas documentos `PRONTO` que o usuario pode ler.
 6. O gerador recebe fontes marcadas e trata seu conteudo como dado nao confiavel.
@@ -56,11 +61,13 @@ O projeto e um monolito modular orientado por capacidades. JDBC explicito deixa 
 
 - Java 21, Spring Boot 4.1, Spring Security 7 e Spring AI 2.0 MCP
 - PostgreSQL 17, `pgvector`, Flyway e Spring JDBC
+- MinIO compativel com S3 e AWS SDK for Java para os arquivos originais
+- ClamAV em modo fail-closed e Tesseract OCR (`por+eng`)
 - OAuth2/OIDC com Keycloak e Swagger com Authorization Code + PKCE
 - OpenAI Responses API e Embeddings API como adaptadores opcionais
-- PDFBox para extracao de PDF
+- PDFBox para extracao e renderizacao de PDF
 - Micrometer, Prometheus, Grafana, OpenTelemetry e Zipkin
-- JUnit, MockMvc e Testcontainers com PostgreSQL/pgvector real
+- JUnit, MockMvc e Testcontainers com PostgreSQL/pgvector e MinIO reais
 - Docker Compose, Postman/Newman e GitHub Actions
 
 ## Inicio rapido
@@ -68,7 +75,7 @@ O projeto e um monolito modular orientado por capacidades. JDBC explicito deixa 
 ### Requisitos
 
 - Docker Desktop com Compose
-- Portas livres: `8083`, `54326`, `18084`, `19411`, `19093` e `13003`
+- Portas livres: `8083`, `54326`, `18084`, `19000`, `19001`, `13310`, `19411`, `19093` e `13003`
 
 ### Subir a plataforma
 
@@ -87,6 +94,8 @@ Espere o servico `aplicacao` ficar `healthy`. A primeira construcao baixa as dep
 | API | http://localhost:8083 | token OAuth2 |
 | Swagger | http://localhost:8083/swagger-ui.html | `contextpilot-swagger` + PKCE |
 | Keycloak | http://localhost:18084 | `admin` / `admin` |
+| MinIO Console | http://localhost:19001 | `contextpilot` / `contextpilot_storage_local` |
+| ClamAV | `localhost:13310` | protocolo TCP interno |
 | Grafana | http://localhost:13003 | `admin` / `admin_contextpilot` |
 | Prometheus | http://localhost:19093 | rede local Docker |
 | Zipkin | http://localhost:19411 | local |
@@ -108,7 +117,7 @@ As credenciais existem apenas para desenvolvimento. Altere o arquivo `.env` e o 
 ./scripts/smoke-test.ps1
 ```
 
-O script prova o bloqueio de um documento restrito, concede acesso, exige uma resposta com fonte, registra feedback, executa uma avaliacao, consulta auditoria/metricas e descobre as ferramentas MCP.
+O script executa 15 etapas: prova ClamAV e MinIO, recupera o arquivo original, valida ACL e RAG citado, registra feedback, executa avaliacao, consulta auditoria/metricas, descobre as ferramentas MCP, exige o bloqueio da assinatura inofensiva EICAR e processa um PDF composto somente por imagem com OCR real.
 
 ## Postman
 
@@ -253,6 +262,9 @@ A suite usa uma imagem real `pgvector/pgvector:pg17`. Entre os cenarios cobertos
 - fragmentacao e sobreposicao;
 - geracao extrativa com citacao e recusa;
 - migracao Flyway e extensao `vector`;
+- armazenamento de novos documentos em MinIO e leitura retrocompativel de `BYTEA` legado;
+- protocolo `INSTREAM` do ClamAV, rejeicao de ameaca e comportamento fail-closed;
+- preferencia por texto nativo e acionamento do OCR quando necessario;
 - API e metricas protegidas por credenciais diferentes;
 - documento restrito invisivel antes da permissao;
 - RAG citado depois da permissao;
@@ -260,7 +272,9 @@ A suite usa uma imagem real `pgvector/pgvector:pg17`. Entre os cenarios cobertos
 
 ## Decisoes e limites
 
-- O binario original fica em `BYTEA` para manter uma demonstracao autocontida. O contrato do modulo permite migrar para armazenamento S3 sem alterar o RAG.
+- Novos binarios ficam no MinIO/S3. A migracao preserva e continua lendo documentos antigos em `BYTEA`, permitindo atualizacao sem parada nem reenvio.
+- O antivirus e fail-closed: indisponibilidade ou resposta inesperada impede a persistencia do arquivo.
+- O OCR e acionado somente quando o PDF nao possui texto nativo suficiente e limita paginas, DPI e tempo por pagina.
 - A fila no PostgreSQL e adequada ao monolito e usa `SKIP LOCKED`. Kafka seria custo operacional sem beneficio neste escopo.
 - A autorizacao e repetida no SQL de busca, nao aplicada depois do `LIMIT`.
 - O projeto nao fornece uma interface web; Swagger, Postman, MCP e a API sao os clientes intencionais.
@@ -273,6 +287,7 @@ A suite usa uma imagem real `pgvector/pgvector:pg17`. Entre os cenarios cobertos
 - [ADR 001: monolito modular](docs/adr/001-modular-monolith.md)
 - [ADR 002: ACL dentro da recuperacao](docs/adr/002-retrieval-authorization.md)
 - [ADR 003: modo de IA intercambiavel](docs/adr/003-ai-providers.md)
+- [ADR 004: ingestao segura e armazenamento de objetos](docs/adr/004-secure-document-ingestion.md)
 - [Politica de seguranca](SECURITY.md)
 - [Como contribuir](CONTRIBUTING.md)
 - [Historico de versoes](CHANGELOG.md)

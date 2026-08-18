@@ -7,6 +7,10 @@ spring:
           jwk-set-uri: http://localhost:9999/realms/teste/protocol/openid-connect/certs
 
 contextpilot:
+  antivirus:
+    ativo: false
+  ocr:
+    ativo: false
   ingestao:
     atraso-inicial-ms: 600000
     intervalo-ms: 600000

@@ -7,7 +7,9 @@ COPY src src
 RUN ./mvnw -q -DskipTests package
 
 FROM eclipse-temurin:21-jre-alpine
-RUN addgroup -S contextpilot && adduser -S contextpilot -G contextpilot
+RUN apk add --no-cache tesseract-ocr tesseract-ocr-data-eng tesseract-ocr-data-por \
+    && addgroup -S contextpilot \
+    && adduser -S contextpilot -G contextpilot
 WORKDIR /aplicacao
 COPY --from=construcao /codigo/target/assistente-conhecimento-*.jar aplicacao.jar
 USER contextpilot

@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.UUID;
 
 import br.com.contextpilot.document.DocumentModels.TarefaIngestao;
+import br.com.contextpilot.document.DocumentModels.OrigemTexto;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,10 +23,16 @@ class DocumentIngestionTransaction {
     }
 
     @Transactional
-    public void concluir(TarefaIngestao tarefa, UUID espacoId, List<String> trechos, List<String> vetores) {
+    public void concluir(
+            TarefaIngestao tarefa,
+            UUID espacoId,
+            List<String> trechos,
+            List<String> vetores,
+            OrigemTexto origemTexto,
+            int paginasOcr) {
         Instant instante = Instant.now(relogio);
         repositorio.substituirTrechos(tarefa.documentoId(), espacoId, trechos, vetores, instante);
-        repositorio.concluir(tarefa, instante);
+        repositorio.concluir(tarefa, origemTexto, paginasOcr, instante);
     }
 
     @Transactional

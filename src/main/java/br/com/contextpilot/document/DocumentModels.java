@@ -24,6 +24,21 @@ public final class DocumentModels {
         FALHOU
     }
 
+    public enum ArmazenamentoDocumento {
+        BANCO,
+        S3
+    }
+
+    public enum ResultadoAntivirus {
+        NAO_VERIFICADO,
+        LIMPO
+    }
+
+    public enum OrigemTexto {
+        NATIVO,
+        OCR
+    }
+
     public enum NivelPermissaoDocumento {
         LEITURA,
         GESTAO
@@ -40,6 +55,11 @@ public final class DocumentModels {
             String titulo,
             String nomeArquivo,
             String tipoMime,
+            ArmazenamentoDocumento armazenamento,
+            ResultadoAntivirus resultadoAntivirus,
+            Instant verificadoAntivirusEm,
+            OrigemTexto origemTexto,
+            int paginasOcr,
             VisibilidadeDocumento visibilidade,
             EstadoDocumento estado,
             int versao,
@@ -55,7 +75,13 @@ public final class DocumentModels {
             UUID espacoId,
             String nomeArquivo,
             String tipoMime,
-            byte[] conteudoOriginal) {
+            ReferenciaConteudo referenciaConteudo) {
+    }
+
+    record ReferenciaConteudo(
+            ArmazenamentoDocumento armazenamento,
+            String chaveArmazenamento,
+            byte[] conteudoLegado) {
     }
 
     record TarefaIngestao(UUID id, UUID documentoId, int tentativa) {

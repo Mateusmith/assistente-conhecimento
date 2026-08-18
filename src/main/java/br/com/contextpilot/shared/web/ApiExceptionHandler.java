@@ -8,6 +8,7 @@ import br.com.contextpilot.shared.domain.BusinessRuleException;
 import br.com.contextpilot.shared.domain.ConflictException;
 import br.com.contextpilot.shared.domain.ForbiddenOperationException;
 import br.com.contextpilot.shared.domain.ResourceNotFoundException;
+import br.com.contextpilot.shared.domain.ServiceUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -45,6 +46,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(BusinessRuleException.class)
     ResponseEntity<ApiError> regra(BusinessRuleException excecao, HttpServletRequest requisicao) {
         return resposta(HttpStatus.UNPROCESSABLE_ENTITY, "REGRA_DE_NEGOCIO", excecao.getMessage(), requisicao, List.of());
+    }
+
+    @ExceptionHandler(ServiceUnavailableException.class)
+    ResponseEntity<ApiError> indisponivel(ServiceUnavailableException excecao, HttpServletRequest requisicao) {
+        return resposta(HttpStatus.SERVICE_UNAVAILABLE, "SERVICO_INDISPONIVEL", excecao.getMessage(), requisicao, List.of());
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})

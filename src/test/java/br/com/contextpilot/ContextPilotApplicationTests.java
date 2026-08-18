@@ -12,37 +12,82 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
+import br.com.contextpilot.configuration.StorageProperties;
 import br.com.contextpilot.document.DocumentIngestionService;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.containers.wait.strategy.Wait;
 
-@Import(TestcontainersConfiguration.class)
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
+@Testcontainers
 class ContextPilotApplicationTests {
+
+    @Container
+    static final PostgreSQLContainer BANCO = new PostgreSQLContainer(
+            DockerImageName.parse("pgvector/pgvector:pg17").asCompatibleSubstituteFor("postgres"));
+
+    @Container
+    static final GenericContainer<?> MINIO = new GenericContainer<>(
+            DockerImageName.parse("minio/minio:RELEASE.2025-09-07T16-13-09Z"))
+            .withEnv("MINIO_ROOT_USER", "contextpilot")
+            .withEnv("MINIO_ROOT_PASSWORD", "contextpilot_storage_local")
+            .withCommand("server", "/data")
+            .withExposedPorts(9000)
+            .waitingFor(Wait.forHttp("/minio/health/live").forPort(9000));
+
+    @DynamicPropertySource
+    static void configurarInfraestrutura(DynamicPropertyRegistry propriedades) {
+        propriedades.add("spring.datasource.url", BANCO::getJdbcUrl);
+        propriedades.add("spring.datasource.username", BANCO::getUsername);
+        propriedades.add("spring.datasource.password", BANCO::getPassword);
+        propriedades.add("contextpilot.armazenamento.endpoint",
+                () -> "http://" + MINIO.getHost() + ":" + MINIO.getMappedPort(9000));
+        propriedades.add("contextpilot.armazenamento.chave-acesso", () -> "contextpilot");
+        propriedades.add("contextpilot.armazenamento.chave-secreta", () -> "contextpilot_storage_local");
+    }
 
     private final MockMvc http;
     private final ObjectMapper json;
     private final JdbcClient banco;
     private final DocumentIngestionService ingestao;
+    private final S3Client s3;
+    private final StorageProperties armazenamento;
 
     @Autowired
-    ContextPilotApplicationTests(MockMvc http, ObjectMapper json, JdbcClient banco, DocumentIngestionService ingestao) {
+    ContextPilotApplicationTests(
+            MockMvc http,
+            ObjectMapper json,
+            JdbcClient banco,
+            DocumentIngestionService ingestao,
+            S3Client s3,
+            StorageProperties armazenamento) {
         this.http = http;
         this.json = json;
         this.banco = banco;
         this.ingestao = ingestao;
+        this.s3 = s3;
+        this.armazenamento = armazenamento;
     }
 
     @Test
@@ -53,7 +98,7 @@ class ContextPilotApplicationTests {
                 .query(Integer.class).single();
 
         assertThat(extensao).isOne();
-        assertThat(migracoes).isOne();
+        assertThat(migracoes).isEqualTo(2);
     }
 
     @Test
@@ -71,8 +116,30 @@ class ContextPilotApplicationTests {
     void deveExecutarRagComAclCitacoesFeedbackEAvaliacao() throws Exception {
         UUID espacoId = criarEspaco();
         adicionarMembro(espacoId, "carla", "LEITOR");
-        UUID documentoId = enviarDocumentoRestrito(espacoId);
+        String envio = enviarDocumentoRestrito(espacoId);
+        UUID documentoId = UUID.fromString(json.readTree(envio).path("id").asText());
+        assertThat(json.readTree(envio).path("armazenamento").asText()).isEqualTo("S3");
+        assertThat(json.readTree(envio).path("resultadoAntivirus").asText()).isEqualTo("NAO_VERIFICADO");
+        var armazenamento = banco.sql("""
+                        SELECT armazenamento, chave_armazenamento, conteudo_original IS NULL AS sem_bytea
+                          FROM documentos
+                         WHERE id = :id
+                        """)
+                .param("id", documentoId)
+                .query((rs, linha) -> java.util.Map.of(
+                        "tipo", rs.getString("armazenamento"),
+                        "chave", rs.getString("chave_armazenamento"),
+                        "semBytea", rs.getBoolean("sem_bytea")))
+                .single();
+        assertThat(armazenamento).containsEntry("tipo", "S3").containsEntry("semBytea", true);
+        assertThat(armazenamento.get("chave").toString()).contains(documentoId.toString());
         ingestao.consumirFila();
+
+        http.perform(get("/api/v1/espacos/{espacoId}/documentos/{documentoId}/conteudo", espacoId, documentoId)
+                        .with(usuario("ana")))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                        .contains("30 dias"));
 
         http.perform(get("/api/v1/espacos/{espacoId}/documentos/{documentoId}", espacoId, documentoId)
                         .with(usuario("carla")))
@@ -123,6 +190,63 @@ class ContextPilotApplicationTests {
         assertThat(eventos).isGreaterThanOrEqualTo(6);
     }
 
+    @Test
+    void deveContinuarLendoDocumentoLegadoArmazenadoNoBanco() throws Exception {
+        UUID espacoId = criarEspaco();
+        UUID documentoId = UUID.randomUUID();
+        byte[] conteudo = "Conteudo preservado pela migracao retrocompativel.".getBytes(StandardCharsets.UTF_8);
+
+        banco.sql("""
+                        INSERT INTO documentos
+                            (id, espaco_id, titulo, nome_arquivo, tipo_mime, visibilidade, estado,
+                             hash_sha256, conteudo_original, tamanho_bytes, criado_por, processado_em)
+                        VALUES
+                            (:id, :espacoId, 'Documento legado', 'legado.txt', 'text/plain', 'ESPACO', 'PRONTO',
+                             :hash, :conteudo, :tamanho, 'ana', CURRENT_TIMESTAMP)
+                        """)
+                .param("id", documentoId)
+                .param("espacoId", espacoId)
+                .param("hash", "a".repeat(64))
+                .param("conteudo", conteudo)
+                .param("tamanho", conteudo.length)
+                .update();
+
+        http.perform(get("/api/v1/espacos/{espacoId}/documentos/{documentoId}", espacoId, documentoId)
+                        .with(usuario("ana")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.armazenamento").value("BANCO"))
+                .andExpect(jsonPath("$.resultadoAntivirus").value("NAO_VERIFICADO"));
+
+        http.perform(get("/api/v1/espacos/{espacoId}/documentos/{documentoId}/conteudo", espacoId, documentoId)
+                        .with(usuario("ana")))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(result.getResponse().getContentAsByteArray()).isEqualTo(conteudo));
+    }
+
+    @Test
+    void deveRecusarObjetoCujoConteudoNaoCorrespondeAoHash() throws Exception {
+        UUID espacoId = criarEspaco();
+        String envio = enviarDocumentoRestrito(espacoId);
+        UUID documentoId = UUID.fromString(json.readTree(envio).path("id").asText());
+        String chave = banco.sql("SELECT chave_armazenamento FROM documentos WHERE id = :id")
+                .param("id", documentoId)
+                .query(String.class)
+                .single();
+
+        byte[] adulterado = "conteudo adulterado no armazenamento".getBytes(StandardCharsets.UTF_8);
+        s3.putObject(PutObjectRequest.builder()
+                        .bucket(armazenamento.bucket())
+                        .key(chave)
+                        .contentType("text/plain")
+                        .metadata(java.util.Map.of("sha256", "0".repeat(64)))
+                        .build(),
+                RequestBody.fromBytes(adulterado));
+
+        http.perform(get("/api/v1/espacos/{espacoId}/documentos/{documentoId}/conteudo", espacoId, documentoId)
+                        .with(usuario("ana")))
+                .andExpect(status().isServiceUnavailable());
+    }
+
     private UUID criarEspaco() throws Exception {
         String resposta = http.perform(post("/api/v1/espacos")
                         .with(usuario("ana"))
@@ -141,7 +265,7 @@ class ContextPilotApplicationTests {
                 .andExpect(status().isCreated());
     }
 
-    private UUID enviarDocumentoRestrito(UUID espacoId) throws Exception {
+    private String enviarDocumentoRestrito(UUID espacoId) throws Exception {
         var arquivo = new MockMultipartFile("arquivo", "politica-reembolso.md", "text/markdown",
                 """
                         # Politica de reembolso
@@ -157,7 +281,7 @@ class ContextPilotApplicationTests {
                         .with(usuario("ana")))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-        return UUID.fromString(json.readTree(resposta).path("id").asText());
+        return resposta;
     }
 
     private UUID criarConjunto(UUID espacoId) throws Exception {

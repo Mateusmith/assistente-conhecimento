@@ -21,16 +21,34 @@
       "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0}
     },
     {
+      "type": "stat",
+      "title": "Arquivos limpos pelo ClamAV",
+      "targets": [{"expr": "sum(contextpilot_antivirus_verificacoes_total{resultado=\"limpo\"})", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0}
+    },
+    {
+      "type": "stat",
+      "title": "Objetos armazenados",
+      "targets": [{"expr": "sum(contextpilot_armazenamento_operacoes_total{operacao=\"gravar\",resultado=\"sucesso\"})", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 6}
+    },
+    {
+      "type": "stat",
+      "title": "Documentos processados por OCR",
+      "targets": [{"expr": "sum(contextpilot_extracao_total{origem=\"ocr\"})", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 6}
+    },
+    {
       "type": "timeseries",
       "title": "Latencia RAG p95",
       "targets": [{"expr": "histogram_quantile(0.95, sum(rate(contextpilot_rag_latencia_seconds_bucket[5m])) by (le))", "refId": "A"}],
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6}
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12}
     },
     {
       "type": "timeseries",
       "title": "Requisicoes HTTP",
       "targets": [{"expr": "sum(rate(http_server_requests_seconds_count[5m])) by (status)", "legendFormat": "{{status}}", "refId": "A"}],
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6}
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12}
     }
   ],
   "schemaVersion": 39,
@@ -39,5 +57,5 @@
   "time": {"from": "now-1h", "to": "now"},
   "title": "Assistente de Conhecimento - Operacao",
   "uid": "assistente-conhecimento-operacao",
-  "version": 1
+  "version": 2
 }
