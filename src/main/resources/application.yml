@@ -1,6 +1,6 @@
 spring:
   application:
-    name: contextpilot
+    name: assistente-conhecimento
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:54326/contextpilot}
     username: ${DATABASE_USER:contextpilot}
@@ -52,7 +52,7 @@ contextpilot:
     senha: ${OBSERVABILITY_PASSWORD:contextpilot_metrics_local}
 
 spring.ai.mcp.server:
-  name: contextpilot-mcp
+  name: assistente-conhecimento-mcp
   version: 1.0.0
   type: SYNC
   protocol: STATELESS

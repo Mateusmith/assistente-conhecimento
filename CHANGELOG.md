@@ -21,4 +21,4 @@ e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes unitarios, integracao com Testcontainers, smoke test e colecao Postman executavel.
 - Docker Compose completo, CI no GitHub Actions e documentacao de arquitetura e ameacas.
 
-[1.0.0]: https://github.com/Mateusmith/contextpilot/releases/tag/v1.0.0
+[1.0.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.0.0

@@ -6,7 +6,7 @@
   "clients": [
     {
       "clientId": "contextpilot-postman",
-      "name": "ContextPilot - Postman",
+      "name": "Assistente de Conhecimento - Postman",
       "enabled": true,
       "publicClient": true,
       "directAccessGrantsEnabled": true,
@@ -14,7 +14,7 @@
     },
     {
       "clientId": "contextpilot-swagger",
-      "name": "ContextPilot - Swagger",
+      "name": "Assistente de Conhecimento - Swagger",
       "enabled": true,
       "publicClient": true,
       "directAccessGrantsEnabled": false,
@@ -25,7 +25,7 @@
     },
     {
       "clientId": "contextpilot-mcp",
-      "name": "ContextPilot - MCP",
+      "name": "Assistente de Conhecimento - MCP",
       "enabled": true,
       "publicClient": true,
       "directAccessGrantsEnabled": true,

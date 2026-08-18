@@ -1,16 +1,18 @@
-# ContextPilot
+# Assistente de Conhecimento
 
-Plataforma Java para transformar documentos corporativos em respostas rastreaveis, sem ignorar quem pode acessar cada informacao. O ContextPilot combina RAG, busca hibrida, citacoes verificaveis, permissoes por documento, avaliacoes automatizadas e ferramentas MCP em uma unica aplicacao executavel.
+Plataforma Java para transformar documentos corporativos em respostas rastreaveis, sem ignorar quem pode acessar cada informacao. O Assistente de Conhecimento combina RAG, busca hibrida, citacoes verificaveis, permissoes por documento, avaliacoes automatizadas e ferramentas MCP em uma unica aplicacao executavel.
+
+O nome publico do produto e **Assistente de Conhecimento**. Os prefixos tecnicos `CONTEXT_PILOT_*`, o pacote `br.com.contextpilot`, o realm `contextpilot` e as metricas `contextpilot_*` foram preservados para manter compatibilidade com ambientes existentes.
 
 [![Java 21](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot)](https://spring.io/projects/spring-boot)
 [![Spring AI 2.0](https://img.shields.io/badge/Spring%20AI-2.0-6DB33F)](https://spring.io/projects/spring-ai)
-[![CI](https://github.com/Mateusmith/contextpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Mateusmith/contextpilot/actions/workflows/ci.yml)
+[![CI](https://github.com/Mateusmith/assistente-conhecimento/actions/workflows/ci.yml/badge.svg)](https://github.com/Mateusmith/assistente-conhecimento/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Problema resolvido
 
-Um chatbot corporativo simples pode recuperar um trecho que o usuario nao deveria ver, inventar uma resposta sem evidencia ou piorar silenciosamente depois de uma mudanca. O ContextPilot trata esses riscos como regras de negocio:
+Um chatbot corporativo simples pode recuperar um trecho que o usuario nao deveria ver, inventar uma resposta sem evidencia ou piorar silenciosamente depois de uma mudanca. O Assistente de Conhecimento trata esses riscos como regras de negocio:
 
 - a ACL entra na consulta SQL antes da recuperacao, evitando vazamento por pos-filtragem;
 - toda afirmacao entregue precisa apontar para marcadores como `[F1]`;
@@ -25,7 +27,7 @@ Um chatbot corporativo simples pode recuperar um trecho que o usuario nao deveri
 ```mermaid
 flowchart LR
     U["Cliente / Postman / agente MCP"] --> K["Keycloak OAuth2"]
-    U --> A["ContextPilot API"]
+    U --> A["Assistente de Conhecimento API"]
     A --> W["Espacos e ACL"]
     A --> D["Documentos e ingestao"]
     A --> R["Busca hibrida segura"]
@@ -71,8 +73,8 @@ O projeto e um monolito modular orientado por capacidades. JDBC explicito deixa 
 ### Subir a plataforma
 
 ```powershell
-git clone https://github.com/Mateusmith/contextpilot.git
-cd contextpilot
+git clone https://github.com/Mateusmith/assistente-conhecimento.git
+cd assistente-conhecimento
 Copy-Item .env.example .env
 docker compose --profile observability up -d --build
 docker compose ps
@@ -112,8 +114,8 @@ O script prova o bloqueio de um documento restrito, concede acesso, exige uma re
 
 Importe os dois arquivos:
 
-- [colecao](postman/ContextPilot.postman_collection.json)
-- [ambiente local](postman/ContextPilot.postman_environment.json)
+- [colecao](postman/AssistenteConhecimento.postman_collection.json)
+- [ambiente local](postman/AssistenteConhecimento.postman_environment.json)
 
 Defina `document_file` com o caminho absoluto de [politica-reembolso.md](postman/politica-reembolso.md) e execute as pastas na ordem. A colecao salva tokens e identificadores automaticamente e contem assercoes de ACL, citacao, avaliacao e descoberta MCP.
 

@@ -12,11 +12,11 @@
     </parent>
 
     <groupId>br.com.contextpilot</groupId>
-    <artifactId>contextpilot</artifactId>
+    <artifactId>assistente-conhecimento</artifactId>
     <version>1.0.0</version>
-    <name>ContextPilot</name>
+    <name>Assistente de Conhecimento</name>
     <description>Plataforma de conhecimento corporativo com RAG seguro, fontes verificaveis e MCP</description>
-    <url>https://github.com/Mateusmith/contextpilot</url>
+    <url>https://github.com/Mateusmith/assistente-conhecimento</url>
 
     <licenses>
         <license>

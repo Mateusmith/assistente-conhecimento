@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Configuration;
 public class OpenApiConfig {
 
     @Bean
-    OpenAPI contextPilotOpenApi(@Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String emissor) {
+    OpenAPI assistenteConhecimentoOpenApi(@Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String emissor) {
         var fluxo = new OAuthFlow()
                 .authorizationUrl(emissor + "/protocol/openid-connect/auth")
                 .tokenUrl(emissor + "/protocol/openid-connect/token");
@@ -26,7 +26,7 @@ public class OpenApiConfig {
 
         return new OpenAPI()
                 .info(new Info()
-                        .title("ContextPilot API")
+                        .title("Assistente de Conhecimento API")
                         .version("1.0.0")
                         .description("Conhecimento corporativo com RAG seguro, fontes verificaveis e MCP."))
                 .components(new Components().addSecuritySchemes("oauth2", esquema))

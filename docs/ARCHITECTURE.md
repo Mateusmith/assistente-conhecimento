@@ -1,15 +1,15 @@
-# Arquitetura do ContextPilot
+# Arquitetura do Assistente de Conhecimento
 
 ## Contexto
 
-O ContextPilot organiza conhecimento privado em espacos. Membros possuem um papel no espaco, mas documentos restritos exigem permissao propria. Consultas geram respostas somente a partir dos trechos acessiveis ao usuario autenticado.
+O Assistente de Conhecimento organiza conhecimento privado em espacos. Membros possuem um papel no espaco, mas documentos restritos exigem permissao propria. Consultas geram respostas somente a partir dos trechos acessiveis ao usuario autenticado.
 
 ```mermaid
 C4Context
-    title Contexto do ContextPilot
+    title Contexto do Assistente de Conhecimento
     Person(usuario, "Colaborador", "Consulta conhecimento autorizado")
     Person(curador, "Curador", "Publica documentos e avalia respostas")
-    System(contextpilot, "ContextPilot", "RAG seguro e verificavel")
+    System(contextpilot, "Assistente de Conhecimento", "RAG seguro e verificavel")
     System_Ext(keycloak, "Keycloak", "Identidade OAuth2/OIDC")
     System_Ext(openai, "OpenAI", "Geracao e embeddings opcionais")
     System_Ext(observabilidade, "Stack de observabilidade", "Metricas e traces")

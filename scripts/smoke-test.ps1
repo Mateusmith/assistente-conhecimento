@@ -91,7 +91,7 @@ $cabecalhosMcp = @{
 $inicializacaoMcp = Invoke-RestMethod -Method Post -Uri "$BaseUrl/mcp" -Headers $cabecalhosMcp `
     -ContentType "application/json" `
     -Body '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1.0.0"}}}'
-if ($inicializacaoMcp.result.serverInfo.name -ne "contextpilot-mcp") {
+if ($inicializacaoMcp.result.serverInfo.name -ne "assistente-conhecimento-mcp") {
     throw "Servidor MCP nao respondeu com a identidade esperada."
 }
 $ferramentasMcp = Invoke-RestMethod -Method Post -Uri "$BaseUrl/mcp" -Headers $cabecalhosMcp `

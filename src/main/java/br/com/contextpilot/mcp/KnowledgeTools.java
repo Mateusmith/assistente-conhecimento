@@ -32,7 +32,7 @@ public class KnowledgeTools {
         this.usuarioAtual = usuarioAtual;
     }
 
-    @McpTool(description = "Lista somente os documentos que o usuario autenticado pode acessar em um espaco do ContextPilot")
+    @McpTool(description = "Lista somente os documentos que o usuario autenticado pode acessar em um espaco do Assistente de Conhecimento")
     public List<DocumentoResponse> listarDocumentos(
             @McpToolParam(description = "Identificador UUID do espaco") String espacoId) {
         return documentos.listar(UUID.fromString(espacoId), usuarioAtual.obterId());

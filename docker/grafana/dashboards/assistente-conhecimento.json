@@ -34,10 +34,10 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["contextpilot", "rag", "java"],
+  "tags": ["assistente-conhecimento", "rag", "java"],
   "templating": {"list": []},
   "time": {"from": "now-1h", "to": "now"},
-  "title": "ContextPilot - Operacao",
-  "uid": "contextpilot-operacao",
+  "title": "Assistente de Conhecimento - Operacao",
+  "uid": "assistente-conhecimento-operacao",
   "version": 1
 }

@@ -9,7 +9,7 @@ RUN ./mvnw -q -DskipTests package
 FROM eclipse-temurin:21-jre-alpine
 RUN addgroup -S contextpilot && adduser -S contextpilot -G contextpilot
 WORKDIR /aplicacao
-COPY --from=construcao /codigo/target/contextpilot-*.jar aplicacao.jar
+COPY --from=construcao /codigo/target/assistente-conhecimento-*.jar aplicacao.jar
 USER contextpilot
 EXPOSE 8080 9090
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-Dfile.encoding=UTF-8", "-jar", "aplicacao.jar"]

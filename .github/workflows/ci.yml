@@ -43,4 +43,4 @@ jobs:
       - name: Validar Compose
         run: docker compose config --quiet
       - name: Construir imagem
-        run: docker build --tag contextpilot:${{ github.sha }} .
+        run: docker build --tag assistente-conhecimento:${{ github.sha }} .
