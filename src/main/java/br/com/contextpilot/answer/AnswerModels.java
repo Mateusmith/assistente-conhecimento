@@ -43,6 +43,14 @@ public final class AnswerModels {
             double pontuacao) {
     }
 
+    public enum PapelMemoria {
+        USUARIO,
+        ASSISTENTE
+    }
+
+    public record MensagemMemoria(PapelMemoria papel, String conteudo) {
+    }
+
     public record RespostaRag(
             UUID consultaId,
             String pergunta,

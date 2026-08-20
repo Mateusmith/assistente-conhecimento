@@ -45,7 +45,8 @@ public class PrivacyService {
         metricas.counter("contextpilot.privacidade.operacoes", "tipo", "exportacao").increment();
         return new ExportacaoPrivacidade(usuarioId, Instant.now(relogio), repositorio.listarEspacos(usuarioId),
                 repositorio.listarDocumentos(usuarioId), repositorio.listarConsultas(usuarioId),
-                repositorio.listarFeedbacks(usuarioId), repositorio.listarEventosAuditoria(usuarioId));
+                repositorio.listarConversas(usuarioId), repositorio.listarFeedbacks(usuarioId),
+                repositorio.listarEventosAuditoria(usuarioId));
     }
 
     @Transactional
@@ -56,19 +57,27 @@ public class PrivacyService {
                     "Transfira ou exclua os espacos sob sua propriedade antes de apagar os dados: "
                             + String.join(", ", espacos));
         }
+        if (repositorio.bloquearConversasEVerificarProcessamento(usuarioId)) {
+            throw new ConflictException("Aguarde a resposta em andamento antes de excluir seus dados.");
+        }
         String pseudonimo = pseudonimizar(usuarioId);
+        int conversas = repositorio.excluirConversas(usuarioId);
         int consultas = repositorio.excluirConsultas(usuarioId);
         int vinculos = repositorio.excluirVinculosEPseudonimizar(usuarioId, pseudonimo);
         auditoria.registrar(null, pseudonimo, "DADOS_PESSOAIS_EXCLUIDOS", "USUARIO", pseudonimo,
-                Map.of("consultasExcluidas", consultas, "vinculosExcluidos", vinculos));
+                Map.of("consultasExcluidas", consultas, "conversasExcluidas", conversas,
+                        "vinculosExcluidos", vinculos));
         metricas.counter("contextpilot.privacidade.operacoes", "tipo", "exclusao").increment();
         return new ExclusaoPrivacidadeResponse(
-                "CONCLUIDA", pseudonimo, consultas, vinculos, Instant.now(relogio));
+                "CONCLUIDA", pseudonimo, consultas, conversas, vinculos, Instant.now(relogio));
     }
 
     @Scheduled(cron = "${contextpilot.privacidade.cron-retencao:0 20 2 * * *}")
     public void aplicarRetencao() {
+        int conversas = repositorio.expurgarConversasVencidas();
         int excluidas = repositorio.expurgarConsultasVencidas();
+        metricas.counter("contextpilot.privacidade.retencao", "resultado", "conversa_excluida")
+                .increment(conversas);
         metricas.counter("contextpilot.privacidade.retencao", "resultado", "consulta_excluida")
                 .increment(excluidas);
     }

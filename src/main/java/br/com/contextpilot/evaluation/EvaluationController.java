@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import br.com.contextpilot.evaluation.EvaluationModels.CasoAvaliacao;
+import br.com.contextpilot.evaluation.EvaluationModels.ComparacaoExecucoes;
 import br.com.contextpilot.evaluation.EvaluationModels.ConjuntoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.CriarCasoRequest;
 import br.com.contextpilot.evaluation.EvaluationModels.CriarConjuntoRequest;
@@ -67,5 +68,14 @@ public class EvaluationController {
             @PathVariable UUID conjuntoId,
             @PathVariable UUID execucaoId) {
         return servico.buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioAtual.obterId());
+    }
+
+    @GetMapping("/{conjuntoId}/execucoes/{execucaoId}/comparacoes/{execucaoBaseId}")
+    ComparacaoExecucoes comparar(
+            @PathVariable UUID espacoId,
+            @PathVariable UUID conjuntoId,
+            @PathVariable UUID execucaoId,
+            @PathVariable UUID execucaoBaseId) {
+        return servico.comparar(espacoId, conjuntoId, execucaoId, execucaoBaseId, usuarioAtual.obterId());
     }
 }

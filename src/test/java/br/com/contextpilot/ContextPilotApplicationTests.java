@@ -5,10 +5,13 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.nio.charset.StandardCharsets;
@@ -104,7 +107,7 @@ class ContextPilotApplicationTests {
                 .query(Integer.class).single();
 
         assertThat(extensao).isOne();
-        assertThat(migracoes).isEqualTo(3);
+        assertThat(migracoes).isEqualTo(4);
     }
 
     @Test
@@ -184,16 +187,154 @@ class ContextPilotApplicationTests {
 
         UUID conjuntoId = criarConjunto(espacoId);
         adicionarCaso(espacoId, conjuntoId, documentoId);
-        http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
+        String execucaoBase = http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
                         .with(usuario("ana")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.estado").value("CONCLUIDA"))
                 .andExpect(jsonPath("$.casosAprovados").value(1))
-                .andExpect(jsonPath("$.taxaAcerto").value(1.0));
+                .andExpect(jsonPath("$.taxaAcerto").value(1.0))
+                .andExpect(jsonPath("$.recallMedio").value(1.0))
+                .andExpect(jsonPath("$.precisaoMedia").value(1.0))
+                .andExpect(jsonPath("$.mrrMedio").value(1.0))
+                .andExpect(jsonPath("$.resultados[0].orcamentoRespeitado").value(true))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        UUID execucaoBaseId = UUID.fromString(json.readTree(execucaoBase).path("id").asText());
+
+        String execucaoAtual = http.perform(post(
+                        "/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
+                        .with(usuario("ana")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        UUID execucaoAtualId = UUID.fromString(json.readTree(execucaoAtual).path("id").asText());
+        http.perform(get("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{execucaoId}/comparacoes/{baseId}",
+                        espacoId, conjuntoId, execucaoAtualId, execucaoBaseId).with(usuario("ana")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.regressao").value(false))
+                .andExpect(jsonPath("$.deltaRecall").value(0.0));
 
         Integer eventos = banco.sql("SELECT COUNT(*) FROM eventos_auditoria WHERE espaco_id = :espacoId")
                 .param("espacoId", espacoId).query(Integer.class).single();
         assertThat(eventos).isGreaterThanOrEqualTo(6);
+    }
+
+    @Test
+    void deveManterMemoriaConversacionalIsoladaEStreamingValidado() throws Exception {
+        UUID espacoId = criarEspaco();
+        adicionarMembro(espacoId, "carla", "LEITOR");
+        String envio = enviarDocumentoRestrito(espacoId);
+        UUID documentoId = UUID.fromString(json.readTree(envio).path("id").asText());
+        ingestao.consumirFila();
+        http.perform(post("/api/v1/espacos/{espacoId}/documentos/{documentoId}/permissoes", espacoId, documentoId)
+                        .with(usuario("ana"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"usuarioId\":\"carla\",\"nivel\":\"LEITURA\"}"))
+                .andExpect(status().isNoContent());
+
+        String criada = http.perform(post("/api/v1/espacos/{espacoId}/conversas", espacoId)
+                        .with(usuario("carla"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.titulo").value("Nova conversa"))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        UUID conversaId = UUID.fromString(json.readTree(criada).path("id").asText());
+
+        String primeiraInteracao = http.perform(post(
+                        "/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .header("Idempotency-Key", "conversa-primeira-pergunta")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pergunta\":\"Qual e o prazo para solicitar reembolso?\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.versao").value(1))
+                .andExpect(jsonPath("$.resposta.fontes[0].documentoId").value(documentoId.toString()))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        String consultaPrimeira = json.readTree(primeiraInteracao).path("resposta").path("consultaId").asText();
+        http.perform(post("/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .header("Idempotency-Key", "conversa-primeira-pergunta")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pergunta\":\"Qual e o prazo para solicitar reembolso?\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.versao").value(1))
+                .andExpect(jsonPath("$.resposta.consultaId").value(consultaPrimeira));
+        http.perform(post("/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .header("Idempotency-Key", "conversa-primeira-pergunta")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pergunta\":\"Esta e outra pergunta\"}"))
+                .andExpect(status().isConflict());
+
+        http.perform(post("/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pergunta\":\"E quais dados a solicitacao deve conter?\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.versao").value(2))
+                .andExpect(jsonPath("$.resposta.recusada").value(false));
+
+        http.perform(post("/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .header("Idempotency-Key", "conversa-primeira-pergunta")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pergunta\":\"Qual e o prazo para solicitar reembolso?\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.versao").value(1))
+                .andExpect(jsonPath("$.resposta.consultaId").value(consultaPrimeira));
+
+        http.perform(get("/api/v1/espacos/{espacoId}/conversas/{conversaId}", espacoId, conversaId)
+                        .with(usuario("carla")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mensagens.length()").value(4));
+        http.perform(get("/api/v1/espacos/{espacoId}/conversas/{conversaId}", espacoId, conversaId)
+                        .with(usuario("ana")))
+                .andExpect(status().isNotFound());
+
+        banco.sql("""
+                        UPDATE conversas
+                           SET token_lease = :token, lease_ate = CURRENT_TIMESTAMP + INTERVAL '2 minutes'
+                         WHERE id = :id
+                        """)
+                .param("token", UUID.randomUUID()).param("id", conversaId).update();
+        http.perform(post("/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pergunta\":\"Pode repetir?\"}"))
+                .andExpect(status().isConflict());
+        http.perform(put("/api/v1/espacos/{espacoId}/conversas/{conversaId}", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"estado\":\"ARQUIVADA\"}"))
+                .andExpect(status().isConflict());
+        banco.sql("UPDATE conversas SET token_lease = NULL, lease_ate = NULL WHERE id = :id")
+                .param("id", conversaId).update();
+
+        var requisicaoStreaming = http.perform(post(
+                        "/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens/stream", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pergunta\":\"Qual e o prazo novamente?\"}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        requisicaoStreaming.getAsyncResult(10_000);
+        http.perform(asyncDispatch(requisicaoStreaming))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("event:fontes")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("event:resposta")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("event:concluido")));
+
+        http.perform(put("/api/v1/espacos/{espacoId}/conversas/{conversaId}", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"estado\":\"ARQUIVADA\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("ARQUIVADA"));
+        http.perform(post("/api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens", espacoId, conversaId)
+                        .with(usuario("carla"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"pergunta\":\"Pergunta em conversa arquivada\"}"))
+                .andExpect(status().isUnprocessableEntity());
     }
 
     @Test
@@ -367,14 +508,50 @@ class ContextPilotApplicationTests {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.codigo").value("LIMITE_EXCEDIDO"));
 
+        UUID conjuntoFalha = criarConjunto(espacoId);
+        http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/casos", espacoId, conjuntoFalha)
+                        .with(usuario("ana"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"pergunta":"Existe informacao inexistente?","termosEsperados":[],
+                                 "documentosEsperados":[],"deveRecusar":true}
+                                """))
+                .andExpect(status().isCreated());
+        http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoFalha)
+                        .with(usuario("ana")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("FALHOU"))
+                .andExpect(jsonPath("$.erro").value(org.hamcrest.Matchers.containsString("RateLimit")));
+
+        String conversa = http.perform(post("/api/v1/espacos/{espacoId}/conversas", espacoId)
+                        .with(usuario("carla"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        UUID conversaId = UUID.fromString(json.readTree(conversa).path("id").asText());
+
         http.perform(get("/api/v1/privacidade/exportacao").with(usuario("carla")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.espacos[?(@.id == '%s')]".formatted(espacoId)).isNotEmpty());
+                .andExpect(jsonPath("$.espacos[?(@.id == '%s')]".formatted(espacoId)).isNotEmpty())
+                .andExpect(jsonPath("$.conversas[0].id").value(conversaId.toString()));
         http.perform(delete("/api/v1/privacidade/meus-dados").param("confirmar", "true").with(usuario("ana")))
                 .andExpect(status().isConflict());
+        banco.sql("""
+                        UPDATE conversas
+                           SET token_lease = :token, lease_ate = CURRENT_TIMESTAMP + INTERVAL '2 minutes'
+                         WHERE id = :id
+                        """)
+                .param("token", UUID.randomUUID()).param("id", conversaId).update();
+        http.perform(delete("/api/v1/privacidade/meus-dados")
+                        .param("confirmar", "true").with(usuario("carla")))
+                .andExpect(status().isConflict());
+        banco.sql("UPDATE conversas SET token_lease = NULL, lease_ate = NULL WHERE id = :id")
+                .param("id", conversaId).update();
         http.perform(delete("/api/v1/privacidade/meus-dados").param("confirmar", "true").with(usuario("carla")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.estado").value("CONCLUIDA"));
+                .andExpect(jsonPath("$.estado").value("CONCLUIDA"))
+                .andExpect(jsonPath("$.conversasExcluidas").value(1));
         http.perform(get("/api/v1/espacos/{espacoId}", espacoId).with(usuario("carla")))
                 .andExpect(status().isNotFound());
     }
@@ -455,6 +632,8 @@ class ContextPilotApplicationTests {
         corpo.putArray("termosEsperados").add("30 dias");
         corpo.putArray("documentosEsperados").add(documentoId.toString());
         corpo.put("deveRecusar", false);
+        corpo.put("latenciaMaximaMs", 10000);
+        corpo.put("custoMaximoUsd", 1.0);
         http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/casos", espacoId, conjuntoId)
                         .with(usuario("ana"))
                         .contentType(MediaType.APPLICATION_JSON)

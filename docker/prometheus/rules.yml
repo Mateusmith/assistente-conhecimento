@@ -54,10 +54,10 @@ groups:
           resumo: "Reindexacao de embeddings falhou repetidamente"
           runbook: "docs/runbooks/reindexing-failure.md"
       - alert: QualidadeRagRegrediu
-        expr: contextpilot_avaliacao_taxa_acerto < 0.8
+        expr: min({__name__=~"contextpilot_avaliacao_(taxa_acerto|recall|precisao|mrr)"}) < 0.8
         for: 15m
         labels:
           severidade: alta
         annotations:
-          resumo: "Taxa da ultima avaliacao RAG abaixo de 80%"
+          resumo: "Uma metrica da ultima avaliacao RAG ficou abaixo de 80%"
           runbook: "docs/runbooks/rag-quality.md"

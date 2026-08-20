@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "84a98c0e-8812-49f7-a108-7dff55c66612",
     "name": "Assistente de Conhecimento API",
-    "description": "Fluxo completo 1.2: autenticacao, ingestao segura, ACL, RAG citado, filtros, comparacao de busca, reindexacao blue-green, governanca, LGPD, avaliacao e MCP.",
+    "description": "Fluxo completo 1.3: autenticacao com audiencia, ingestao segura, ACL, RAG citado, conversas idempotentes, SSE validado, avaliacao quantitativa, MCP, reindexacao, governanca e LGPD.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -32,7 +32,7 @@
             ]},
             "url": "{{keycloak_url}}/realms/contextpilot/protocol/openid-connect/token"
           },
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Token Ana emitido', () => pm.response.to.have.status(200));", "pm.environment.set('token_ana', pm.response.json().access_token);"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Token Ana emitido', () => pm.response.to.have.status(200));", "const token = pm.response.json().access_token;", "const parte = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');", "const payload = JSON.parse(require('atob')(parte));", "pm.test('Token destinado a API', () => pm.expect([].concat(payload.aud)).to.include('contextpilot-api'));", "pm.environment.set('token_ana', token);"], "type": "text/javascript"}}]
         },
         {
           "name": "Token Carla",
@@ -167,15 +167,25 @@
           "request": {
             "method": "POST",
             "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_ana}}"}],
-            "body": {"mode": "raw", "raw": "{\n  \"pergunta\": \"Qual e o prazo para solicitar reembolso?\",\n  \"termosEsperados\": [\"30 dias\"],\n  \"documentosEsperados\": [\"{{documento_id}}\"],\n  \"deveRecusar\": false\n}"},
+            "body": {"mode": "raw", "raw": "{\n  \"pergunta\": \"Qual e o prazo para solicitar reembolso?\",\n  \"termosEsperados\": [\"30 dias\"],\n  \"documentosEsperados\": [\"{{documento_id}}\"],\n  \"deveRecusar\": false,\n  \"latenciaMaximaMs\": 10000,\n  \"custoMaximoUsd\": 1\n}"},
             "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/casos"
           },
           "event": [{"listen": "test", "script": {"exec": ["pm.test('Caso criado', () => pm.response.to.have.status(201));"], "type": "text/javascript"}}]
         },
         {
-          "name": "Executar avaliacao",
+          "name": "Executar avaliacao base",
           "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Avaliacao concluida', () => pm.response.to.have.status(200));", "pm.test('Caso aprovado', () => { const r = pm.response.json(); pm.expect(r.estado).to.eql('CONCLUIDA'); pm.expect(r.taxaAcerto).to.eql(1); });"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Avaliacao concluida', () => pm.response.to.have.status(200));", "const r = pm.response.json();", "pm.test('Metricas perfeitas', () => { pm.expect(r.estado).to.eql('CONCLUIDA'); pm.expect(r.taxaAcerto).to.eql(1); pm.expect(r.recallMedio).to.eql(1); pm.expect(r.precisaoMedia).to.eql(1); pm.expect(r.mrrMedio).to.eql(1); });", "pm.environment.set('execucao_base_id', r.id);"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Executar avaliacao atual",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Nova avaliacao concluida', () => pm.response.to.have.status(200));", "pm.environment.set('execucao_atual_id', pm.response.json().id);"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Comparar com baseline",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes/{{execucao_atual_id}}/comparacoes/{{execucao_base_id}}"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Comparacao concluida', () => pm.response.to.have.status(200));", "pm.test('Sem regressao', () => { const r = pm.response.json(); pm.expect(r.regressao).to.eql(false); pm.expect(r.deltaRecall).to.eql(0); });"], "type": "text/javascript"}}]
         },
         {
           "name": "Consultar auditoria",
@@ -185,7 +195,67 @@
       ]
     },
     {
-      "name": "06 - MCP",
+      "name": "06 - Conversas seguras",
+      "item": [
+        {
+          "name": "Criar conversa",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_carla}}"}],
+            "body": {"mode": "raw", "raw": "{\"titulo\":\"Duvidas sobre reembolso\"}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/conversas"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Conversa criada', () => pm.response.to.have.status(201));", "pm.environment.set('conversa_id', pm.response.json().id);"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Enviar primeira mensagem",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_carla}}"}, {"key": "Idempotency-Key", "value": "postman-conversa-001"}],
+            "body": {"mode": "raw", "raw": "{\"pergunta\":\"Qual e o prazo para solicitar reembolso?\"}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/conversas/{{conversa_id}}/mensagens"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Mensagem respondida', () => pm.response.to.have.status(200));", "const r = pm.response.json();", "pm.test('Resposta validada', () => { pm.expect(r.versao).to.eql(1); pm.expect(r.resposta.recusada).to.eql(false); pm.expect(r.resposta.fontes[0].documentoId).to.eql(pm.environment.get('documento_id')); });", "pm.environment.set('consulta_conversa_id', r.resposta.consultaId);"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Repetir mensagem idempotente",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_carla}}"}, {"key": "Idempotency-Key", "value": "postman-conversa-001"}],
+            "body": {"mode": "raw", "raw": "{\"pergunta\":\"Qual e o prazo para solicitar reembolso?\"}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/conversas/{{conversa_id}}/mensagens"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Retry reutilizado', () => pm.response.to.have.status(200));", "pm.test('Consulta nao duplicada', () => pm.expect(pm.response.json().resposta.consultaId).to.eql(pm.environment.get('consulta_conversa_id')));"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Pergunta de continuacao",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_carla}}"}, {"key": "Idempotency-Key", "value": "postman-conversa-002"}],
+            "body": {"mode": "raw", "raw": "{\"pergunta\":\"E quais dados a solicitacao deve conter?\"}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/conversas/{{conversa_id}}/mensagens"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Continuacao respondida', () => pm.response.to.have.status(200));", "pm.test('Memoria contextual aplicada', () => { const r = pm.response.json(); pm.expect(r.versao).to.eql(2); pm.expect(r.resposta.recusada).to.eql(false); });"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Responder por SSE validado",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Accept", "value": "text/event-stream"}, {"key": "Authorization", "value": "Bearer {{token_carla}}"}, {"key": "Idempotency-Key", "value": "postman-stream-001"}],
+            "body": {"mode": "raw", "raw": "{\"pergunta\":\"Pode resumir o prazo novamente?\"}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/conversas/{{conversa_id}}/mensagens/stream"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('SSE concluido', () => pm.response.to.have.status(200));", "const eventos = pm.response.text();", "pm.test('Resposta saiu com fontes e conclusao', () => { pm.expect(eventos).to.include('event:fontes'); pm.expect(eventos).to.include('event:resposta'); pm.expect(eventos).to.include('event:concluido'); });"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Consultar historico",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_carla}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/conversas/{{conversa_id}}"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Historico consultado', () => pm.response.to.have.status(200));", "pm.test('Tres interacoes persistidas', () => pm.expect(pm.response.json().mensagens).to.have.lengthOf(6));"], "type": "text/javascript"}}]
+        }
+      ]
+    },
+    {
+      "name": "07 - MCP",
       "item": [
         {
           "name": "Inicializar servidor MCP",
@@ -221,7 +291,7 @@
       ]
     },
     {
-      "name": "07 - Busca, indice e governanca",
+      "name": "08 - Busca, indice e governanca",
       "item": [
         {
           "name": "Comparar estrategias de busca",
@@ -264,7 +334,7 @@
         {
           "name": "Exportar dados LGPD de Carla",
           "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_carla}}"}], "url": "{{base_url}}/api/v1/privacidade/exportacao"},
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Exportacao entregue', () => pm.response.to.have.status(200));", "pm.test('Dados pertencem a Carla', () => pm.expect(pm.response.json().usuarioId).to.eql('carla'));"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Exportacao entregue', () => pm.response.to.have.status(200));", "pm.test('Dados e conversas pertencem a Carla', () => { const r = pm.response.json(); pm.expect(r.usuarioId).to.eql('carla'); pm.expect(r.conversas.length).to.be.above(0); });"], "type": "text/javascript"}}]
         }
       ]
     }

@@ -4,6 +4,24 @@ Todas as mudancas relevantes deste projeto sao registradas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
+## [1.3.0] - 2026-08-20
+
+### Adicionado
+
+- Conversas persistentes isoladas por espaco e usuario, com memoria limitada e titulo automatico.
+- Lease por conversa e `Idempotency-Key` vinculada a impressao SHA-256 da requisicao.
+- Streaming SSE por eventos que publica somente a resposta final com citacoes validadas.
+- Avaliacao RAG 2.0 com recall, precisao, MRR, latencia p95, custo e limites por caso.
+- Comparacao entre execucao atual e baseline com deteccao objetiva de regressao.
+- Validacao obrigatoria da audiencia `contextpilot-api` em tokens JWT.
+
+### Alterado
+
+- Historico conversacional participa da busca, mas nunca e aceito como fonte.
+- Exportacao, exclusao e retencao LGPD agora incluem conversas e mensagens.
+- Keycloak emite a audiencia da API para Postman, Swagger e MCP.
+- Falhas durante avaliacao passam a encerrar a execucao com estado `FALHOU`.
+
 ## [1.2.0] - 2026-08-18
 
 ### Adicionado
@@ -63,3 +81,4 @@ e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 [1.0.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.0.0
 [1.1.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.1.0
 [1.2.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.2.0
+[1.3.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.3.0

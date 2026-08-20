@@ -1,9 +1,11 @@
 package br.com.contextpilot.evaluation;
 
+import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -14,6 +16,7 @@ import br.com.contextpilot.answer.AnswerModels.RespostaRag;
 import br.com.contextpilot.answer.AnswerService;
 import br.com.contextpilot.audit.AuditService;
 import br.com.contextpilot.evaluation.EvaluationModels.CasoAvaliacao;
+import br.com.contextpilot.evaluation.EvaluationModels.ComparacaoExecucoes;
 import br.com.contextpilot.evaluation.EvaluationModels.ConjuntoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.CriarCasoRequest;
 import br.com.contextpilot.evaluation.EvaluationModels.CriarConjuntoRequest;
@@ -33,6 +36,7 @@ public class EvaluationService {
     private final WorkspaceAccessService acessoEspaco;
     private final AnswerService respostas;
     private final AuditService auditoria;
+    private final EvaluationMetrics metricasAvaliacao;
     private final MeterRegistry metricas;
     private final Clock relogio;
 
@@ -41,12 +45,14 @@ public class EvaluationService {
             WorkspaceAccessService acessoEspaco,
             AnswerService respostas,
             AuditService auditoria,
+            EvaluationMetrics metricasAvaliacao,
             MeterRegistry metricas,
             Clock relogio) {
         this.repositorio = repositorio;
         this.acessoEspaco = acessoEspaco;
         this.respostas = respostas;
         this.auditoria = auditoria;
+        this.metricasAvaliacao = metricasAvaliacao;
         this.metricas = metricas;
         this.relogio = relogio;
     }
@@ -82,7 +88,8 @@ public class EvaluationService {
         UUID id = UUID.randomUUID();
         List<String> termos = requisicao.termosEsperados().stream().map(String::trim).distinct().toList();
         repositorio.criarCaso(id, conjuntoId, requisicao.pergunta().trim(), termos,
-                requisicao.documentosEsperados().stream().distinct().toList(), requisicao.deveRecusar(), Instant.now(relogio));
+                requisicao.documentosEsperados().stream().distinct().toList(), requisicao.deveRecusar(),
+                requisicao.latenciaMaximaMs(), requisicao.custoMaximoUsd(), Instant.now(relogio));
         return repositorio.listarCasos(conjuntoId).stream().filter(c -> c.id().equals(id)).findFirst().orElseThrow();
     }
 
@@ -102,21 +109,46 @@ public class EvaluationService {
 
         UUID execucaoId = UUID.randomUUID();
         repositorio.iniciarExecucao(execucaoId, conjuntoId, usuarioId, casos.size(), Instant.now(relogio));
-        int aprovados = 0;
-        for (CasoAvaliacao caso : casos) {
-            RespostaRag resposta = respostas.perguntar(espacoId, caso.pergunta(), usuarioId);
-            ResultadoCaso resultado = avaliar(caso, resposta);
-            repositorio.salvarResultado(execucaoId, resultado);
-            if (resultado.aprovado()) {
-                aprovados++;
+        try {
+            int aprovados = 0;
+            List<ResultadoCaso> resultados = new ArrayList<>();
+            String modeloEmbedding = null;
+            String provedorIa = null;
+            for (CasoAvaliacao caso : casos) {
+                RespostaRag resposta = respostas.perguntar(espacoId, caso.pergunta(), usuarioId);
+                ResultadoCaso resultado = avaliar(caso, resposta);
+                repositorio.salvarResultado(execucaoId, resultado);
+                resultados.add(resultado);
+                modeloEmbedding = resposta.modeloEmbedding();
+                provedorIa = resposta.provedorIa();
+                if (resultado.aprovado()) {
+                    aprovados++;
+                }
             }
+            double taxa = (double) aprovados / casos.size();
+            double recallMedio = media(resultados.stream().mapToDouble(ResultadoCaso::pontuacaoFontes).toArray());
+            double precisaoMedia = media(resultados.stream().mapToDouble(ResultadoCaso::precisaoFontes).toArray());
+            double mrrMedio = media(resultados.stream().mapToDouble(ResultadoCaso::mrr).toArray());
+            long latenciaP95 = percentil95(resultados.stream().mapToLong(ResultadoCaso::latenciaMs).toArray());
+            BigDecimal custoTotal = resultados.stream().map(ResultadoCaso::custoUsd)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            repositorio.concluirExecucao(execucaoId, aprovados, taxa, recallMedio, precisaoMedia,
+                    mrrMedio, latenciaP95, custoTotal, modeloEmbedding, provedorIa, Instant.now(relogio));
+            metricasAvaliacao.registrar(taxa, recallMedio, precisaoMedia, mrrMedio, latenciaP95, custoTotal);
+            metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "concluida").increment();
+            auditoria.registrar(espacoId, usuarioId, "AVALIACAO_EXECUTADA", "EXECUCAO_AVALIACAO",
+                    execucaoId.toString(), Map.of("casos", casos.size(), "aprovados", aprovados,
+                            "taxa", taxa, "recall", recallMedio, "precisao", precisaoMedia, "mrr", mrrMedio));
+            return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
+        } catch (RuntimeException excecao) {
+            String erro = "Falha durante a avaliacao: " + excecao.getClass().getSimpleName();
+            repositorio.falharExecucao(execucaoId,
+                    erro, Instant.now(relogio));
+            metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "falhou").increment();
+            auditoria.registrar(espacoId, usuarioId, "AVALIACAO_FALHOU", "EXECUCAO_AVALIACAO",
+                    execucaoId.toString(), Map.of("erro", excecao.getClass().getSimpleName()));
+            return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
         }
-        double taxa = (double) aprovados / casos.size();
-        repositorio.concluirExecucao(execucaoId, aprovados, taxa, Instant.now(relogio));
-        metricas.gauge("contextpilot.avaliacao.taxa_acerto", taxa);
-        auditoria.registrar(espacoId, usuarioId, "AVALIACAO_EXECUTADA", "EXECUCAO_AVALIACAO",
-                execucaoId.toString(), Map.of("casos", casos.size(), "aprovados", aprovados, "taxa", taxa));
-        return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
     }
 
     public ExecucaoAvaliacao buscarExecucao(
@@ -130,6 +162,42 @@ public class EvaluationService {
                 .orElseThrow(() -> new ResourceNotFoundException("Execucao de avaliacao nao encontrada."));
     }
 
+    public ComparacaoExecucoes comparar(
+            UUID espacoId,
+            UUID conjuntoId,
+            UUID execucaoAtualId,
+            UUID execucaoBaseId,
+            String usuarioId) {
+        ExecucaoAvaliacao atual = buscarExecucao(espacoId, conjuntoId, execucaoAtualId, usuarioId);
+        ExecucaoAvaliacao base = buscarExecucao(espacoId, conjuntoId, execucaoBaseId, usuarioId);
+        if (!"CONCLUIDA".equals(atual.estado()) || !"CONCLUIDA".equals(base.estado())) {
+            throw new BusinessRuleException("Somente execucoes concluidas podem ser comparadas.");
+        }
+
+        double deltaTaxa = atual.taxaAcerto() - base.taxaAcerto();
+        double deltaRecall = atual.recallMedio() - base.recallMedio();
+        double deltaPrecisao = atual.precisaoMedia() - base.precisaoMedia();
+        double deltaMrr = atual.mrrMedio() - base.mrrMedio();
+        long deltaLatencia = atual.latenciaP95Ms() - base.latenciaP95Ms();
+        BigDecimal deltaCusto = atual.custoTotalUsd().subtract(base.custoTotalUsd());
+        List<String> motivos = new ArrayList<>();
+        verificarQueda(deltaTaxa, "taxa de acerto", motivos);
+        verificarQueda(deltaRecall, "recall", motivos);
+        verificarQueda(deltaPrecisao, "precisao", motivos);
+        verificarQueda(deltaMrr, "MRR", motivos);
+        if (base.latenciaP95Ms() > 0 && deltaLatencia > 100
+                && atual.latenciaP95Ms() > Math.round(base.latenciaP95Ms() * 1.20)) {
+            motivos.add("latencia p95 aumentou mais de 20%");
+        }
+        if (base.custoTotalUsd().signum() > 0
+                && deltaCusto.compareTo(new BigDecimal("0.000001")) > 0
+                && atual.custoTotalUsd().compareTo(base.custoTotalUsd().multiply(new BigDecimal("1.20"))) > 0) {
+            motivos.add("custo total aumentou mais de 20%");
+        }
+        return new ComparacaoExecucoes(execucaoAtualId, execucaoBaseId, deltaTaxa, deltaRecall,
+                deltaPrecisao, deltaMrr, deltaLatencia, deltaCusto, !motivos.isEmpty(), List.copyOf(motivos));
+    }
+
     private ResultadoCaso avaliar(CasoAvaliacao caso, RespostaRag resposta) {
         String texto = normalizar(resposta.resposta());
         long termosEncontrados = caso.termosEsperados().stream()
@@ -139,17 +207,61 @@ public class EvaluationService {
         double pontuacaoTermos = caso.termosEsperados().isEmpty()
                 ? 1.0 : (double) termosEncontrados / caso.termosEsperados().size();
 
-        Set<UUID> documentosObtidos = new HashSet<>();
+        Set<UUID> documentosObtidos = new LinkedHashSet<>();
         resposta.fontes().forEach(fonte -> documentosObtidos.add(fonte.documentoId()));
         long fontesEncontradas = caso.documentosEsperados().stream().filter(documentosObtidos::contains).count();
         double pontuacaoFontes = caso.documentosEsperados().isEmpty()
                 ? 1.0 : (double) fontesEncontradas / caso.documentosEsperados().size();
+        double precisaoFontes = caso.documentosEsperados().isEmpty()
+                ? 1.0 : documentosObtidos.isEmpty() ? 0.0 : (double) fontesEncontradas / documentosObtidos.size();
+        double mrr = calcularMrr(caso.documentosEsperados(), documentosObtidos);
         boolean recusaCorreta = resposta.recusada() == caso.deveRecusar();
-        boolean aprovado = recusaCorreta && pontuacaoTermos >= 0.8 && pontuacaoFontes >= 0.8;
-        String detalhes = "termos=%.2f; fontes=%.2f; recusaCorreta=%s"
-                .formatted(pontuacaoTermos, pontuacaoFontes, recusaCorreta);
+        boolean latenciaRespeitada = caso.latenciaMaximaMs() == null
+                || resposta.latenciaMs() <= caso.latenciaMaximaMs();
+        boolean custoRespeitado = caso.custoMaximoUsd() == null
+                || resposta.custoEstimadoUsd().compareTo(caso.custoMaximoUsd()) <= 0;
+        boolean orcamentoRespeitado = latenciaRespeitada && custoRespeitado;
+        boolean aprovado = recusaCorreta && pontuacaoTermos >= 0.8 && pontuacaoFontes >= 0.8
+                && precisaoFontes >= 0.5 && mrr > 0 && orcamentoRespeitado;
+        String detalhes = "termos=%.2f; recall=%.2f; precisao=%.2f; mrr=%.2f; recusa=%s; orcamento=%s"
+                .formatted(pontuacaoTermos, pontuacaoFontes, precisaoFontes, mrr,
+                        recusaCorreta, orcamentoRespeitado);
         return new ResultadoCaso(caso.id(), resposta.consultaId(), aprovado,
-                pontuacaoTermos, pontuacaoFontes, recusaCorreta, detalhes);
+                pontuacaoTermos, pontuacaoFontes, precisaoFontes, mrr, recusaCorreta,
+                resposta.latenciaMs(), resposta.custoEstimadoUsd(), orcamentoRespeitado, detalhes);
+    }
+
+    private double calcularMrr(List<UUID> esperados, Set<UUID> obtidos) {
+        if (esperados.isEmpty()) {
+            return 1.0;
+        }
+        int posicao = 1;
+        for (UUID documento : obtidos) {
+            if (esperados.contains(documento)) {
+                return 1.0 / posicao;
+            }
+            posicao++;
+        }
+        return 0.0;
+    }
+
+    private double media(double[] valores) {
+        return java.util.Arrays.stream(valores).average().orElse(0.0);
+    }
+
+    private long percentil95(long[] valores) {
+        if (valores.length == 0) {
+            return 0;
+        }
+        java.util.Arrays.sort(valores);
+        int indice = Math.max(0, (int) Math.ceil(valores.length * 0.95) - 1);
+        return valores[indice];
+    }
+
+    private void verificarQueda(double delta, String metrica, List<String> motivos) {
+        if (delta < -0.05) {
+            motivos.add(metrica + " caiu mais de 5 pontos percentuais");
+        }
     }
 
     private void exigirConjunto(UUID espacoId, UUID conjuntoId) {

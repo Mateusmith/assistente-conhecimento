@@ -14,6 +14,10 @@ import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.core.annotation.Order;
@@ -66,6 +70,18 @@ public class SecurityConfig {
     @Bean
     PasswordEncoder codificadorSenha() {
         return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+    }
+
+    @Bean
+    JwtDecoder decodificadorJwt(
+            @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String emissor,
+            @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}") String chaves,
+            @Value("${contextpilot.seguranca.audiencia-jwt}") String audiencia) {
+        NimbusJwtDecoder decodificador = NimbusJwtDecoder.withJwkSetUri(chaves).build();
+        decodificador.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                JwtValidators.createDefaultWithIssuer(emissor),
+                new JwtAudienceValidator(audiencia)));
+        return decodificador;
     }
 
     @Bean

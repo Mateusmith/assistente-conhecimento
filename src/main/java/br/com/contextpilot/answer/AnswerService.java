@@ -11,6 +11,8 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import br.com.contextpilot.answer.AnswerModels.FonteContexto;
+import br.com.contextpilot.answer.AnswerModels.MensagemMemoria;
+import br.com.contextpilot.answer.AnswerModels.PapelMemoria;
 import br.com.contextpilot.answer.AnswerModels.PerguntarRequest;
 import br.com.contextpilot.answer.AnswerModels.RegistrarFeedbackRequest;
 import br.com.contextpilot.answer.AnswerModels.RespostaRag;
@@ -63,11 +65,20 @@ public class AnswerService {
 
     @Transactional
     public RespostaRag perguntar(UUID espacoId, String pergunta, String usuarioId) {
-        return perguntar(espacoId, new PerguntarRequest(pergunta), usuarioId);
+        return perguntar(espacoId, new PerguntarRequest(pergunta), usuarioId, List.of());
     }
 
     @Transactional
     public RespostaRag perguntar(UUID espacoId, PerguntarRequest requisicao, String usuarioId) {
+        return perguntar(espacoId, requisicao, usuarioId, List.of());
+    }
+
+    @Transactional
+    public RespostaRag perguntar(
+            UUID espacoId,
+            PerguntarRequest requisicao,
+            String usuarioId,
+            List<MensagemMemoria> memoria) {
         long inicio = System.nanoTime();
         acessoEspaco.exigirMembro(espacoId, usuarioId);
         governanca.reservarConsulta(espacoId);
@@ -75,7 +86,9 @@ public class AnswerService {
         EstrategiaBusca estrategia = requisicao.estrategia() == null
                 ? EstrategiaBusca.HIBRIDA : requisicao.estrategia();
         FiltrosBusca filtros = requisicao.filtros() == null ? FiltrosBusca.vazios() : requisicao.filtros();
-        var resultadoBusca = busca.buscar(espacoId, perguntaLimpa, usuarioId, estrategia, filtros);
+        List<MensagemMemoria> memoriaSegura = memoria == null ? List.of() : List.copyOf(memoria);
+        String consultaBusca = construirConsultaBusca(perguntaLimpa, memoriaSegura);
+        var resultadoBusca = busca.buscar(espacoId, consultaBusca, usuarioId, estrategia, filtros);
         var recuperadas = resultadoBusca.fontes();
         List<FonteContexto> fontes = new ArrayList<>();
         for (int indice = 0; indice < recuperadas.size(); indice++) {
@@ -86,7 +99,7 @@ public class AnswerService {
 
         ResultadoGeracao geracao = fontes.isEmpty()
                 ? new ResultadoGeracao(RESPOSTA_SEM_CONTEXTO, "recusa-segura")
-                : gerador.gerar(perguntaLimpa, fontes);
+                : gerador.gerar(perguntaLimpa, fontes, memoriaSegura);
         Validacao validacao = validador.validar(geracao.texto(), fontes);
         List<FonteContexto> citadas = fontes.stream()
                 .filter(fonte -> validacao.marcadores().contains(fonte.marcador()))
@@ -139,6 +152,19 @@ public class AnswerService {
     private String provedor(String nome) {
         int separador = nome.indexOf(':');
         return separador < 0 ? nome : nome.substring(0, separador);
+    }
+
+    private String construirConsultaBusca(String pergunta, List<MensagemMemoria> memoria) {
+        StringBuilder consulta = new StringBuilder();
+        memoria.stream()
+                .filter(mensagem -> mensagem.papel() == PapelMemoria.USUARIO)
+                .skip(Math.max(0, memoria.stream().filter(m -> m.papel() == PapelMemoria.USUARIO).count() - 2))
+                .map(MensagemMemoria::conteudo)
+                .map(String::trim)
+                .filter(texto -> !texto.isBlank())
+                .forEach(texto -> consulta.append(texto, 0, Math.min(texto.length(), 1000)).append('\n'));
+        consulta.append(pergunta);
+        return consulta.length() <= 3000 ? consulta.toString() : consulta.substring(consulta.length() - 3000);
     }
 
 }

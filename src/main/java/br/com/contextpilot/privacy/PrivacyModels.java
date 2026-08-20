@@ -15,6 +15,7 @@ public final class PrivacyModels {
             List<EspacoExportado> espacos,
             List<DocumentoExportado> documentos,
             List<ConsultaExportada> consultas,
+            List<ConversaExportada> conversas,
             List<FeedbackExportado> feedbacks,
             List<EventoAuditoriaExportado> eventosAuditoria) {
     }
@@ -27,6 +28,25 @@ public final class PrivacyModels {
 
     public record ConsultaExportada(
             UUID id, UUID espacoId, String pergunta, String resposta, boolean recusada, Instant criadaEm) {
+    }
+
+    public record ConversaExportada(
+            UUID id,
+            UUID espacoId,
+            String titulo,
+            String estado,
+            Instant criadaEm,
+            Instant atualizadaEm,
+            List<MensagemExportada> mensagens) {
+    }
+
+    public record MensagemExportada(
+            UUID id,
+            UUID consultaId,
+            int sequencia,
+            String papel,
+            String conteudo,
+            Instant criadaEm) {
     }
 
     public record FeedbackExportado(UUID consultaId, boolean util, String comentario, Instant criadoEm) {
@@ -47,6 +67,7 @@ public final class PrivacyModels {
             String estado,
             String identificadorPseudonimo,
             int consultasExcluidas,
+            int conversasExcluidas,
             int vinculosExcluidos,
             Instant concluidaEm) {
     }

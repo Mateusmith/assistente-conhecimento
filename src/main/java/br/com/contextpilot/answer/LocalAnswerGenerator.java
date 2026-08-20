@@ -12,6 +12,8 @@ import java.util.Locale;
 import java.util.Set;
 
 import br.com.contextpilot.answer.AnswerModels.FonteContexto;
+import br.com.contextpilot.answer.AnswerModels.MensagemMemoria;
+import br.com.contextpilot.answer.AnswerModels.PapelMemoria;
 import br.com.contextpilot.answer.AnswerModels.ResultadoGeracao;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -70,6 +72,20 @@ class LocalAnswerGenerator implements AnswerGenerator {
             resposta.append(" [").append(candidata.fonte().marcador()).append(']');
         }
         return new ResultadoGeracao(resposta.toString(), "local-extrativo-v1");
+    }
+
+    @Override
+    public ResultadoGeracao gerar(
+            String pergunta,
+            List<FonteContexto> fontes,
+            List<MensagemMemoria> memoria) {
+        StringBuilder perguntaContextualizada = new StringBuilder();
+        memoria.stream()
+                .filter(mensagem -> mensagem.papel() == PapelMemoria.USUARIO)
+                .map(MensagemMemoria::conteudo)
+                .forEach(texto -> perguntaContextualizada.append(texto).append(' '));
+        perguntaContextualizada.append(pergunta);
+        return gerar(perguntaContextualizada.toString(), fontes);
     }
 
     private Set<String> termosRelevantes(String texto) {

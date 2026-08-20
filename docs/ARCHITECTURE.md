@@ -41,10 +41,11 @@ C4Context
 | `document` | upload, metadados, antivirus, S3, OCR, fila e deteccao de prompt injection |
 | `reindex` | catalogo, construcao em lotes, lease, ativacao e rollback de indices |
 | `retrieval` | filtros, ACL, busca hibrida/semantica/textual e reranking |
-| `answer` | geracao, citacoes, recusa segura, historico e feedback |
+| `answer` | geracao, citacoes, recusa segura e feedback |
+| `conversation` | memoria privada, idempotencia, lease e streaming SSE validado |
 | `governance` | rate limiting, quotas, armazenamento, tokens e custos |
 | `privacy` | exportacao, pseudonimizacao, exclusao e retencao LGPD |
-| `evaluation` | casos e execucoes de regressao RAG |
+| `evaluation` | casos, metricas de recuperacao e comparacao de regressao RAG |
 | `mcp` | ferramentas autenticadas e somente de consulta |
 | `audit` | trilha das operacoes relevantes |
 | `observability` | gauges operacionais, SLOs e alertas |
@@ -62,6 +63,9 @@ erDiagram
     TRECHOS_DOCUMENTO ||--o{ VETORES_TRECHO : representa
     ESPACOS ||--o{ CONSULTAS_RAG : recebe
     CONSULTAS_RAG ||--o{ CITACOES_RESPOSTA : fundamenta
+    ESPACOS ||--o{ CONVERSAS : contem
+    CONVERSAS ||--o{ MENSAGENS_CONVERSA : registra
+    CONSULTAS_RAG ||--o| MENSAGENS_CONVERSA : responde
     ESPACOS ||--o{ CONSUMO_IA_DIARIO : mede
     ESPACOS ||--o{ CONJUNTOS_AVALIACAO : avalia
 ```
@@ -75,6 +79,23 @@ erDiagram
 5. Um reranker deterministico considera cobertura da pergunta e titulo.
 6. O gerador recebe apenas fontes autorizadas e marcadas.
 7. Marcadores ausentes ou inventados produzem recusa segura.
+
+## Conversas e streaming seguro
+
+1. A conversa e localizada por `espaco_id`, `usuario_id` e `id`; outro membro recebe `404`.
+2. Uma lease atomica serializa geracoes na mesma conversa e expira para permitir retomada.
+3. As ultimas mensagens ajudam a compor a busca, mas nao entram na lista de fontes.
+4. Pergunta, estrategia e filtros formam uma impressao SHA-256 associada ao
+   `Idempotency-Key`.
+5. Usuario e assistente sao persistidos em sequencia na mesma transacao.
+6. O SSE transmite fontes e resposta apenas depois da validacao de citacoes.
+
+## Avaliacao RAG
+
+Casos registram ground truth de termos e documentos e podem impor limites de latencia
+e custo. Execucoes persistem recall, precisao, MRR, p95, custo, modelo e provedor. A
+comparacao com uma baseline sinaliza quedas de qualidade acima de cinco pontos
+percentuais e aumentos materiais de desempenho ou custo.
 
 ## Reindexacao blue-green
 
@@ -97,6 +118,7 @@ estados na mesma transacao.
 
 - ingestao e reindexacao usam `FOR UPDATE SKIP LOCKED`;
 - leases vencidos sao retomados por outra instancia;
+- cada conversa possui uma lease propria e o SSE roda em virtual thread;
 - Redis executa um script Lua atomico para limites compartilhados;
 - binarios ficam no S3/MinIO e nao no heap nem no PostgreSQL;
 - Nginx resolve o servico Docker e distribui requisicoes entre replicas;
@@ -110,7 +132,9 @@ estados na mesma transacao.
 - registro do documento e tarefa pertencem a uma transacao;
 - trechos, vetores do indice ativo e conclusao da tarefa sao atomicos;
 - respostas e citacoes sao persistidas juntas;
+- cada par de mensagens e gravado atomicamente e retries reutilizam a consulta anterior;
 - retencao remove consultas e preserva resultados de avaliacao com referencia nula;
+- retencao remove conversas antes das consultas para nao preservar respostas pessoais;
 - documentos V1 em `BYTEA` continuam legiveis.
 
 ## Operacao

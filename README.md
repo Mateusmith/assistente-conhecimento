@@ -23,6 +23,9 @@ regras de negocio:
 - documentos passam por ClamAV, MinIO/S3, SHA-256 e OCR real;
 - indices de embedding sao construidos blue-green e permitem rollback;
 - busca aceita metadados e compara estrategias hibrida, semantica e textual;
+- conversas preservam contexto sem compartilhar memoria entre usuarios;
+- streaming envia somente fontes e resposta ja validadas, nunca tokens crus;
+- avaliacao mede recall, precisao, MRR, p95 e custo contra uma baseline;
 - Redis aplica limites e quotas compartilhados entre replicas;
 - tokens, custos, SLOs, alertas e tempo de ingestao sao observaveis;
 - exportacao, exclusao, pseudonimizacao e retencao apoiam operacoes LGPD;
@@ -52,11 +55,11 @@ O projeto e um monolito modular. JDBC explicito torna visiveis as transacoes, le
 
 ## Tecnologias
 
-- Java 21, Spring Boot 4.1, Spring Security 7 e Spring AI MCP 2.0
+- Java 21, virtual threads, Spring Boot 4.1, Spring Security 7 e Spring AI MCP 2.0
 - PostgreSQL 17, pgvector, Flyway e Spring JDBC
 - Redis com script Lua atomico para limites distribuidos
 - MinIO/S3, AWS SDK, ClamAV, PDFBox e Tesseract `por+eng`
-- OAuth2/OIDC, JWT, Keycloak e Swagger PKCE
+- OAuth2/OIDC, JWT com audiencia, Keycloak, Swagger PKCE e SSE
 - Prometheus, Alertmanager, Grafana, OpenTelemetry e Zipkin
 - JUnit 5, MockMvc, Testcontainers, JaCoCo, Postman e Newman
 - Docker Compose, Nginx, GitHub Actions e configtree para segredos
@@ -111,9 +114,9 @@ Essas credenciais sao apenas locais.
 ./scripts/smoke-test.ps1
 ```
 
-O script executa 21 etapas e prova ClamAV, S3, integridade, OCR, ACL, citacoes,
-avaliacao, MCP, metadados, comparacao de busca, governanca, reindexacao blue-green,
-consulta no novo modelo, rollback e exportacao LGPD.
+O script executa 23 etapas e prova ClamAV, S3, integridade, OCR, ACL, citacoes,
+conversa idempotente, streaming validado, avaliacao quantitativa, MCP, comparacao de
+busca, governanca, reindexacao blue-green, rollback e exportacao LGPD.
 
 ## Postman
 
@@ -122,10 +125,19 @@ Importe:
 - [colecao](postman/AssistenteConhecimento.postman_collection.json)
 - [ambiente local](postman/AssistenteConhecimento.postman_environment.json)
 
-Defina `document_file` com o caminho absoluto de
-[politica-reembolso.md](postman/politica-reembolso.md) e execute as pastas em ordem.
-Tokens e IDs sao capturados automaticamente. A colecao possui assercoes de ACL,
-fontes, armazenamento, avaliacao, MCP, reindexacao, uso e privacidade.
+Execute as pastas em ordem. Tokens e IDs sao capturados automaticamente. No Postman
+Desktop, ajuste `document_file` para o caminho absoluto de
+[politica-reembolso.md](postman/politica-reembolso.md) caso o cliente nao resolva o
+caminho relativo. Pelo terminal, a colecao completa pode ser comprovada a partir da
+raiz do projeto:
+
+```powershell
+npx --yes newman run postman/AssistenteConhecimento.postman_collection.json `
+  -e postman/AssistenteConhecimento.postman_environment.json
+```
+
+A colecao possui assercoes de ACL, fontes, conversas, idempotencia, armazenamento,
+avaliacao, MCP, reindexacao, uso e privacidade.
 
 ## Exemplos da API
 
@@ -247,6 +259,55 @@ Content-Type: application/json
 A resposta mostra os resultados de cada estrategia e a sobreposicao entre semantica e
 textual. Isso permite medir uma mudanca antes de alterar o padrao.
 
+### Conversa com memoria segura
+
+```http
+POST /api/v1/espacos/{espacoId}/conversas
+Authorization: Bearer <token-carla>
+Content-Type: application/json
+
+{"titulo":"Duvidas sobre reembolso"}
+```
+
+```http
+POST /api/v1/espacos/{espacoId}/conversas/{conversaId}/mensagens
+Authorization: Bearer <token-carla>
+Idempotency-Key: reembolso-001
+Content-Type: application/json
+
+{"pergunta":"Qual e o prazo para solicitar reembolso?"}
+```
+
+Uma continuacao como `E quais dados preciso enviar?` usa a janela de memoria apenas
+para contextualizar busca e pergunta. Todas as afirmacoes continuam dependentes das
+fontes autorizadas da nova interacao. Repetir a mesma chave e o mesmo corpo devolve a
+consulta anterior; reutilizar a chave com outro corpo retorna `409`.
+
+Para progresso por SSE, envie o mesmo corpo para
+`POST .../mensagens/stream` com `Accept: text/event-stream`. Os eventos sao `etapa`,
+`fontes`, `resposta` e `concluido`; a resposta so aparece depois da validacao.
+
+### Avaliacao RAG 2.0
+
+```json
+{
+  "pergunta": "Qual e o prazo para reembolso?",
+  "termosEsperados": ["30 dias"],
+  "documentosEsperados": ["<documentoId>"],
+  "deveRecusar": false,
+  "latenciaMaximaMs": 2000,
+  "custoMaximoUsd": 0.01
+}
+```
+
+Cada execucao registra cobertura de termos, recall, precisao, MRR, p95, custo, modelo
+e provedor. Compare uma mudanca com a baseline em:
+
+```http
+GET /api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{atualId}/comparacoes/{baseId}
+Authorization: Bearer <token-ana>
+```
+
 ## Reindexacao sem parada
 
 Modelos habilitados:
@@ -311,9 +372,9 @@ DELETE /api/v1/privacidade/meus-dados?confirmar=true
 Authorization: Bearer <token>
 ```
 
-A exclusao apaga consultas e vinculos, pseudonimiza autoria/auditoria e recusa operar
+A exclusao apaga conversas, consultas e vinculos, pseudonimiza autoria/auditoria e recusa operar
 enquanto o usuario for proprietario de um espaco. A exportacao inclui espacos,
-documentos, consultas, feedbacks e eventos pessoais de auditoria.
+documentos, consultas, conversas, mensagens, feedbacks e eventos pessoais de auditoria.
 
 ## Provedores e custo
 
@@ -369,6 +430,7 @@ Controles adicionais:
 
 - HSTS em HTTPS, CSP, `no-store`, `Referrer-Policy` e `Permissions-Policy`;
 - CORS por lista de origens;
+- tokens exigem assinatura, emissor, validade e audiencia `contextpilot-api`;
 - ClamAV fail-closed e verificacao SHA-256;
 - nenhuma pergunta, resposta ou token em labels de metrica;
 - benchmark adversarial publicado pelo CI.
@@ -376,7 +438,7 @@ Controles adicionais:
 ## Observabilidade
 
 O dashboard provisionado cobre disponibilidade, p95, fila, leases, ingestao, OCR,
-antivirus, armazenamento, reindexacao, quotas, tokens e custo. Prometheus carrega
+antivirus, armazenamento, reindexacao, conversas, quotas, tokens e custo. Prometheus carrega
 [regras de SLO e alerta](docker/prometheus/rules.yml), e cada alerta aponta para
 [runbooks](docs/runbooks).
 
@@ -394,6 +456,8 @@ A suite usa PostgreSQL/pgvector e MinIO reais via Testcontainers e cobre:
 - metadados, tres estrategias e filtro cross-tenant;
 - reindexacao v1 para v2 e rollback;
 - prompt injection, citacao falsa, cross-tenant e documento sem permissao;
+- memoria conversacional isolada, lease, idempotencia, SSE validado e audiencia JWT;
+- recall, precisao, MRR, orcamento e comparacao de execucoes RAG;
 - quotas, uso, exportacao e exclusao LGPD.
 
 O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCoCo em
@@ -402,6 +466,7 @@ O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCo
 ## Documentacao
 
 - [Arquitetura](docs/ARCHITECTURE.md)
+- [Matriz de capacidades de IA](docs/AI-CAPABILITY-MATRIX.md)
 - [Modelo de ameacas](docs/THREAT-MODEL.md)
 - [ADR 001: monolito modular](docs/adr/001-modular-monolith.md)
 - [ADR 002: ACL dentro da recuperacao](docs/adr/002-retrieval-authorization.md)
@@ -409,6 +474,8 @@ O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCo
 - [ADR 004: ingestao segura](docs/adr/004-secure-document-ingestion.md)
 - [ADR 005: indices blue-green](docs/adr/005-blue-green-embedding-indexes.md)
 - [ADR 006: governanca distribuida](docs/adr/006-distributed-governance.md)
+- [ADR 007: memoria conversacional segura](docs/adr/007-secure-conversational-memory.md)
+- [ADR 008: avaliacao RAG quantitativa](docs/adr/008-rag-evaluation-regression.md)
 - [Politica de seguranca](SECURITY.md)
 - [Como contribuir](CONTRIBUTING.md)
 - [Historico](CHANGELOG.md)

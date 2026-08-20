@@ -88,6 +88,28 @@
       "title": "Quotas e rate limiting bloqueados",
       "targets": [{"expr": "sum(rate(contextpilot_governanca_limites_total{resultado=\"bloqueado\"}[5m])) by (tipo)", "legendFormat": "{{tipo}}", "refId": "A"}],
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26}
+    },
+    {
+      "type": "timeseries",
+      "title": "Qualidade da ultima avaliacao RAG",
+      "targets": [
+        {"expr": "contextpilot_avaliacao_taxa_acerto", "legendFormat": "taxa de acerto", "refId": "A"},
+        {"expr": "contextpilot_avaliacao_recall", "legendFormat": "recall", "refId": "B"},
+        {"expr": "contextpilot_avaliacao_precisao", "legendFormat": "precisao", "refId": "C"},
+        {"expr": "contextpilot_avaliacao_mrr", "legendFormat": "MRR", "refId": "D"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34}
+    },
+    {
+      "type": "timeseries",
+      "title": "Conversas e streaming",
+      "targets": [
+        {"expr": "sum(rate(contextpilot_conversas_interacoes_total[5m])) by (resultado)", "legendFormat": "interacao {{resultado}}", "refId": "A"},
+        {"expr": "sum(rate(contextpilot_conversas_streaming_total[5m])) by (resultado)", "legendFormat": "stream {{resultado}}", "refId": "B"},
+        {"expr": "sum(rate(contextpilot_conversas_idempotencia_total[5m]))", "legendFormat": "retry reutilizado", "refId": "C"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34}
     }
   ],
   "schemaVersion": 39,
@@ -96,5 +118,5 @@
   "time": {"from": "now-1h", "to": "now"},
   "title": "Assistente de Conhecimento - Operacao",
   "uid": "assistente-conhecimento-operacao",
-  "version": 3
+  "version": 4
 }

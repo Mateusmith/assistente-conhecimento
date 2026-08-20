@@ -2,6 +2,7 @@ package br.com.contextpilot.evaluation;
 
 import static br.com.contextpilot.shared.domain.SqlTime.instante;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -79,13 +80,16 @@ class EvaluationRepository {
             List<String> termos,
             List<UUID> documentos,
             boolean deveRecusar,
+            Long latenciaMaximaMs,
+            BigDecimal custoMaximoUsd,
             Instant instante) {
         banco.sql("""
                         INSERT INTO casos_avaliacao
-                            (id, conjunto_id, pergunta, termos_esperados, documentos_esperados, deve_recusar, criado_em)
+                            (id, conjunto_id, pergunta, termos_esperados, documentos_esperados, deve_recusar,
+                             latencia_maxima_ms, custo_maximo_usd, criado_em)
                         VALUES
                             (:id, :conjuntoId, :pergunta, CAST(:termos AS jsonb), CAST(:documentos AS jsonb),
-                             :deveRecusar, :instante)
+                             :deveRecusar, :latenciaMaximaMs, :custoMaximoUsd, :instante)
                         """)
                 .param("id", id)
                 .param("conjuntoId", conjuntoId)
@@ -93,13 +97,16 @@ class EvaluationRepository {
                 .param("termos", serializar(termos))
                 .param("documentos", serializar(documentos))
                 .param("deveRecusar", deveRecusar)
+                .param("latenciaMaximaMs", latenciaMaximaMs, java.sql.Types.BIGINT)
+                .param("custoMaximoUsd", custoMaximoUsd, java.sql.Types.NUMERIC)
                 .param("instante", instante(instante))
                 .update();
     }
 
     List<CasoAvaliacao> listarCasos(UUID conjuntoId) {
         return banco.sql("""
-                        SELECT id, conjunto_id, pergunta, termos_esperados::text, documentos_esperados::text, deve_recusar
+                        SELECT id, conjunto_id, pergunta, termos_esperados::text, documentos_esperados::text,
+                               deve_recusar, latencia_maxima_ms, custo_maximo_usd
                           FROM casos_avaliacao
                          WHERE conjunto_id = :conjuntoId
                          ORDER BY criado_em, id
@@ -111,7 +118,9 @@ class EvaluationRepository {
                         rs.getString("pergunta"),
                         lerStrings(rs.getString("termos_esperados")),
                         lerUuids(rs.getString("documentos_esperados")),
-                        rs.getBoolean("deve_recusar")))
+                        rs.getBoolean("deve_recusar"),
+                        rs.getObject("latencia_maxima_ms", Long.class),
+                        rs.getBigDecimal("custo_maximo_usd")))
                 .list();
     }
 
@@ -133,10 +142,12 @@ class EvaluationRepository {
         banco.sql("""
                         INSERT INTO resultados_avaliacao
                             (id, execucao_id, caso_id, consulta_id, aprovado, pontuacao_termos,
-                             pontuacao_fontes, recusa_correta, detalhes)
+                             pontuacao_fontes, precisao_fontes, mrr, recusa_correta,
+                             latencia_ms, custo_usd, orcamento_respeitado, detalhes)
                         VALUES
                             (:id, :execucaoId, :casoId, :consultaId, :aprovado, :termos,
-                             :fontes, :recusa, :detalhes)
+                             :fontes, :precisao, :mrr, :recusa, :latencia, :custo,
+                             :orcamento, :detalhes)
                         """)
                 .param("id", UUID.randomUUID())
                 .param("execucaoId", execucaoId)
@@ -145,29 +156,71 @@ class EvaluationRepository {
                 .param("aprovado", resultado.aprovado())
                 .param("termos", resultado.pontuacaoTermos())
                 .param("fontes", resultado.pontuacaoFontes())
+                .param("precisao", resultado.precisaoFontes())
+                .param("mrr", resultado.mrr())
                 .param("recusa", resultado.recusaCorreta())
+                .param("latencia", resultado.latenciaMs())
+                .param("custo", resultado.custoUsd())
+                .param("orcamento", resultado.orcamentoRespeitado())
                 .param("detalhes", resultado.detalhes())
                 .update();
     }
 
-    void concluirExecucao(UUID id, int aprovados, double taxa, Instant instante) {
+    void concluirExecucao(
+            UUID id,
+            int aprovados,
+            double taxa,
+            double recallMedio,
+            double precisaoMedia,
+            double mrrMedio,
+            long latenciaP95Ms,
+            BigDecimal custoTotalUsd,
+            String modeloEmbedding,
+            String provedorIa,
+            Instant instante) {
         banco.sql("""
                         UPDATE execucoes_avaliacao
                            SET estado = 'CONCLUIDA', casos_aprovados = :aprovados,
-                               taxa_acerto = :taxa, finalizada_em = :instante
+                               taxa_acerto = :taxa, recall_medio = :recallMedio,
+                               precisao_media = :precisaoMedia, mrr_medio = :mrrMedio,
+                               latencia_p95_ms = :latenciaP95Ms, custo_total_usd = :custoTotalUsd,
+                               modelo_embedding = :modeloEmbedding, provedor_ia = :provedorIa,
+                               finalizada_em = :instante
                          WHERE id = :id
                         """)
                 .param("id", id)
                 .param("aprovados", aprovados)
                 .param("taxa", taxa)
+                .param("recallMedio", recallMedio)
+                .param("precisaoMedia", precisaoMedia)
+                .param("mrrMedio", mrrMedio)
+                .param("latenciaP95Ms", latenciaP95Ms)
+                .param("custoTotalUsd", custoTotalUsd)
+                .param("modeloEmbedding", modeloEmbedding, java.sql.Types.VARCHAR)
+                .param("provedorIa", provedorIa, java.sql.Types.VARCHAR)
+                .param("instante", instante(instante))
+                .update();
+    }
+
+    void falharExecucao(UUID id, String erro, Instant instante) {
+        banco.sql("""
+                        UPDATE execucoes_avaliacao
+                           SET estado = 'FALHOU', erro = :erro, finalizada_em = :instante
+                         WHERE id = :id
+                        """)
+                .param("id", id)
+                .param("erro", erro)
                 .param("instante", instante(instante))
                 .update();
     }
 
     Optional<ExecucaoAvaliacao> buscarExecucao(UUID id, UUID conjuntoId) {
         Optional<CabecalhoExecucao> cabecalho = banco.sql("""
-                        SELECT id, conjunto_id, estado, total_casos, casos_aprovados,
-                               COALESCE(taxa_acerto, 0) AS taxa_acerto, iniciada_em, finalizada_em
+                        SELECT id, conjunto_id, estado, erro, total_casos, casos_aprovados,
+                               COALESCE(taxa_acerto, 0) AS taxa_acerto,
+                               recall_medio, precisao_media, mrr_medio, latencia_p95_ms,
+                               custo_total_usd, modelo_embedding, provedor_ia,
+                               iniciada_em, finalizada_em
                           FROM execucoes_avaliacao
                          WHERE id = :id AND conjunto_id = :conjuntoId
                         """)
@@ -179,22 +232,34 @@ class EvaluationRepository {
                             rs.getObject("id", UUID.class),
                             rs.getObject("conjunto_id", UUID.class),
                             rs.getString("estado"),
+                            rs.getString("erro"),
                             rs.getInt("total_casos"),
                             rs.getInt("casos_aprovados"),
                             rs.getDouble("taxa_acerto"),
+                            rs.getDouble("recall_medio"),
+                            rs.getDouble("precisao_media"),
+                            rs.getDouble("mrr_medio"),
+                            rs.getLong("latencia_p95_ms"),
+                            rs.getBigDecimal("custo_total_usd"),
+                            rs.getString("modelo_embedding"),
+                            rs.getString("provedor_ia"),
                             rs.getTimestamp("iniciada_em").toInstant(),
                             finalizada == null ? null : finalizada.toInstant());
                 })
                 .optional();
         return cabecalho.map(valor -> new ExecucaoAvaliacao(
-                valor.id(), valor.conjuntoId(), valor.estado(), valor.totalCasos(), valor.casosAprovados(),
-                valor.taxaAcerto(), valor.iniciadaEm(), valor.finalizadaEm(), listarResultados(valor.id())));
+                valor.id(), valor.conjuntoId(), valor.estado(), valor.erro(),
+                valor.totalCasos(), valor.casosAprovados(),
+                valor.taxaAcerto(), valor.recallMedio(), valor.precisaoMedia(), valor.mrrMedio(),
+                valor.latenciaP95Ms(), valor.custoTotalUsd(), valor.modeloEmbedding(), valor.provedorIa(),
+                valor.iniciadaEm(), valor.finalizadaEm(), listarResultados(valor.id())));
     }
 
     private List<ResultadoCaso> listarResultados(UUID execucaoId) {
         return banco.sql("""
                         SELECT caso_id, consulta_id, aprovado, pontuacao_termos,
-                               pontuacao_fontes, recusa_correta, detalhes
+                               pontuacao_fontes, precisao_fontes, mrr, recusa_correta,
+                               latencia_ms, custo_usd, orcamento_respeitado, detalhes
                           FROM resultados_avaliacao
                          WHERE execucao_id = :execucaoId
                          ORDER BY caso_id
@@ -206,7 +271,12 @@ class EvaluationRepository {
                         rs.getBoolean("aprovado"),
                         rs.getDouble("pontuacao_termos"),
                         rs.getDouble("pontuacao_fontes"),
+                        rs.getDouble("precisao_fontes"),
+                        rs.getDouble("mrr"),
                         rs.getBoolean("recusa_correta"),
+                        rs.getLong("latencia_ms"),
+                        rs.getBigDecimal("custo_usd"),
+                        rs.getBoolean("orcamento_respeitado"),
                         rs.getString("detalhes")))
                 .list();
     }
@@ -235,9 +305,17 @@ class EvaluationRepository {
             UUID id,
             UUID conjuntoId,
             String estado,
+            String erro,
             int totalCasos,
             int casosAprovados,
             double taxaAcerto,
+            double recallMedio,
+            double precisaoMedia,
+            double mrrMedio,
+            long latenciaP95Ms,
+            BigDecimal custoTotalUsd,
+            String modeloEmbedding,
+            String provedorIa,
             Instant iniciadaEm,
             Instant finalizadaEm) {
     }

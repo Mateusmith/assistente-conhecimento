@@ -49,6 +49,7 @@ server:
 contextpilot:
   seguranca:
     tls-terminado-no-proxy: ${TLS_TERMINATED_AT_PROXY:false}
+    audiencia-jwt: ${JWT_AUDIENCE:contextpilot-api}
   ia:
     provedor: ${CONTEXT_PILOT_PROVEDOR_IA:local}
     url-base: ${OPENAI_BASE_URL:https://api.openai.com}
@@ -90,6 +91,10 @@ contextpilot:
   busca:
     limite-fontes: 6
     pontuacao-minima: 0.12
+  conversas:
+    tempo-lease: ${CONVERSATION_LEASE_DURATION:5m}
+    timeout-streaming: ${CONVERSATION_STREAM_TIMEOUT:90s}
+    limite-mensagens-memoria: ${CONVERSATION_MEMORY_MESSAGES:8}
   governanca:
     redis-ativo: ${GOVERNANCE_REDIS_ENABLED:true}
     requisicoes-por-minuto: ${RATE_LIMIT_REQUESTS_PER_MINUTE:120}
@@ -104,7 +109,7 @@ contextpilot:
 
 spring.ai.mcp.server:
   name: assistente-conhecimento-mcp
-  version: 1.2.0
+  version: 1.3.0
   type: SYNC
   protocol: STATELESS
 
