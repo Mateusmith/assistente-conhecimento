@@ -1,5 +1,6 @@
 package br.com.contextpilot.document;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -38,7 +39,9 @@ public final class DocumentModels {
 
     public enum OrigemTexto {
         NATIVO,
-        OCR
+        OCR,
+        VISAO,
+        OCR_E_VISAO
     }
 
     public enum NivelPermissaoDocumento {
@@ -62,6 +65,12 @@ public final class DocumentModels {
             Instant verificadoAntivirusEm,
             OrigemTexto origemTexto,
             int paginasOcr,
+            boolean visaoAplicada,
+            String provedorVisao,
+            String modeloVisao,
+            int tokensVisaoEntrada,
+            int tokensVisaoSaida,
+            BigDecimal custoVisaoUsd,
             JsonNode metadados,
             VisibilidadeDocumento visibilidade,
             EstadoDocumento estado,

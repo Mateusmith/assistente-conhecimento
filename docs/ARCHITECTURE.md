@@ -19,7 +19,7 @@ C4Context
     System_Ext(redis, "Redis", "Rate limits e quotas distribuidas")
     System_Ext(objetos, "MinIO ou S3", "Arquivos originais")
     System_Ext(security, "ClamAV + Tesseract", "Antivirus e OCR")
-    System_Ext(ai, "OpenAI opcional", "Geracao e embeddings")
+    System_Ext(ai, "OpenAI ou Ollama", "Geracao, embeddings e visao opcionais")
     System_Ext(obs, "Prometheus, Alertmanager, Grafana e Zipkin", "SLOs e operacao")
     Rel(usuario, gateway, "REST ou MCP sobre HTTPS")
     Rel(curador, gateway, "REST sobre HTTPS")
@@ -38,7 +38,7 @@ C4Context
 | Pacote | Responsabilidade |
 |---|---|
 | `workspace` | espacos, membros, papeis e acesso |
-| `document` | upload, metadados, antivirus, S3, OCR, fila e deteccao de prompt injection |
+| `document` | upload, metadados, antivirus, S3, OCR, visao, fila e deteccao de prompt injection |
 | `reindex` | catalogo, construcao em lotes, lease, ativacao e rollback de indices |
 | `retrieval` | filtros, ACL, busca hibrida/semantica/textual, MMR e contexto vizinho |
 | `answer` | geracao, proveniencia do prompt, citacoes, recusa segura e feedback |
@@ -102,8 +102,9 @@ usado sem armazenar uma segunda copia do prompt nem expor raciocinio interno.
 
 Casos registram ground truth de termos e documentos e podem impor limites de latencia
 e custo. O `POST` apenas agenda o job e responde `202`. Workers reivindicam uma
-execucao com `FOR UPDATE SKIP LOCKED`, renovam lease, ignoram casos ja persistidos e
-atualizam progresso. Uma replica pode retomar lease vencida e o usuario pode solicitar
+execucao com `FOR UPDATE SKIP LOCKED`, processam um lote, renovam lease, ignoram casos
+ja persistidos e atualizam progresso. Ao liberar o lote, outra replica pode continuar.
+Uma replica tambem pode retomar lease vencida e o usuario pode solicitar
 cancelamento. Execucoes concluidas persistem recall, precisao, MRR, p95, custo, modelo
 e provedor. A comparacao com uma baseline sinaliza quedas de qualidade acima de cinco
 pontos percentuais e aumentos materiais de desempenho ou custo.
@@ -112,7 +113,7 @@ pontos percentuais e aumentos materiais de desempenho ou custo.
 stateDiagram-v2
     [*] --> PENDENTE
     PENDENTE --> EXECUTANDO: worker reivindica
-    EXECUTANDO --> EXECUTANDO: caso persistido + lease renovada
+    EXECUTANDO --> EXECUTANDO: lote persistido + posse liberada
     EXECUTANDO --> EXECUTANDO: outra replica retoma lease vencida
     PENDENTE --> CANCELADA: cancelamento antes do inicio
     EXECUTANDO --> CANCELADA: cancelamento cooperativo
@@ -141,6 +142,7 @@ estados na mesma transacao.
 
 - ingestao e reindexacao usam `FOR UPDATE SKIP LOCKED`;
 - avaliacoes usam a mesma disciplina de fila, lease e resultado idempotente por caso;
+- agregados de avaliacao sao calculados no banco e resultados detalhados sao paginados;
 - leases vencidos sao retomados por outra instancia;
 - cada conversa possui uma lease propria e o SSE roda em virtual thread;
 - Redis executa um script Lua atomico para limites compartilhados;
@@ -161,11 +163,12 @@ estados na mesma transacao.
 - retencao remove consultas e preserva resultados de avaliacao com referencia nula;
 - retencao remove conversas antes das consultas para nao preservar respostas pessoais;
 - documentos V1 em `BYTEA` continuam legiveis.
+- descricoes visuais passam pelo mesmo detector, embedding, ACL e citacoes dos textos.
 
 ## Operacao
 
 Prometheus calcula disponibilidade e p95, enquanto alertas cobrem API indisponivel,
-erros, latencia, fila parada, lease expirado, reindexacao falha e qualidade abaixo de
+erros, latencia, fila parada, lease expirado de ingestao/avaliacao, reindexacao falha e qualidade abaixo de
 80%. Cada alerta aponta para um runbook em `docs/runbooks`. Tokens e custos sao
 agregados por espaco e dia; valores unitarios sao configuraveis para evitar apresentar
 uma estimativa desatualizada como cobranca real.

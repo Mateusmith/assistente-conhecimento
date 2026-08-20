@@ -62,6 +62,31 @@ class TesseractOcrEngine implements OcrEngine {
         }
     }
 
+    @Override
+    public ResultadoOcr extrair(BufferedImage imagem) {
+        if (!propriedades.ativo()) {
+            throw new BusinessRuleException("O OCR de imagens esta desativado.");
+        }
+        validarConfiguracao();
+        Path diretorio = criarDiretorioTemporario();
+        try {
+            Path arquivoImagem = diretorio.resolve("imagem.png");
+            if (!ImageIO.write(imagem, "png", arquivoImagem.toFile())) {
+                throw new ServiceUnavailableException("Nao foi possivel preparar a imagem para OCR.");
+            }
+            return new ResultadoOcr(executarTesseract(arquivoImagem, diretorio, 1), 1);
+        } catch (IOException excecao) {
+            throw new ServiceUnavailableException("Nao foi possivel preparar a imagem para OCR.", excecao);
+        } finally {
+            removerDiretorio(diretorio);
+        }
+    }
+
+    @Override
+    public boolean ativo() {
+        return propriedades.ativo();
+    }
+
     private String executarTesseract(Path imagem, Path diretorio, int pagina) {
         Path baseSaida = diretorio.resolve("ocr-%03d".formatted(pagina));
         Path arquivoErro = diretorio.resolve("ocr-%03d.erro.log".formatted(pagina));

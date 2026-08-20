@@ -107,9 +107,18 @@ class ContextPilotApplicationTests {
                 .query(Integer.class).single();
         Integer migracoes = banco.sql("SELECT COUNT(*) FROM flyway_schema_history WHERE success = true")
                 .query(Integer.class).single();
+        Integer tamanhoOrigemTexto = banco.sql("""
+                        SELECT character_maximum_length
+                          FROM information_schema.columns
+                         WHERE table_schema = 'public'
+                           AND table_name = 'documentos'
+                           AND column_name = 'origem_texto'
+                        """)
+                .query(Integer.class).single();
 
         assertThat(extensao).isOne();
-        assertThat(migracoes).isEqualTo(5);
+        assertThat(migracoes).isEqualTo(7);
+        assertThat(tamanhoOrigemTexto).isGreaterThanOrEqualTo("OCR_E_VISAO".length());
     }
 
     @Test
@@ -193,6 +202,19 @@ class ContextPilotApplicationTests {
 
         UUID conjuntoId = criarConjunto(espacoId);
         adicionarCaso(espacoId, conjuntoId, documentoId);
+        var importacao = json.createObjectNode();
+        var casosImportados = importacao.putArray("casos");
+        var casoImportado = casosImportados.addObject();
+        casoImportado.put("pergunta", "Em quantos dias o reembolso deve ser solicitado?");
+        casoImportado.putArray("termosEsperados").add("30 dias");
+        casoImportado.putArray("documentosEsperados").add(documentoId.toString());
+        casoImportado.put("deveRecusar", false);
+        http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/casos/importacoes",
+                        espacoId, conjuntoId).with(usuario("ana"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsBytes(importacao)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.inseridos").value(1));
         String agendamentoBase = http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
                         .with(usuario("ana")))
                 .andExpect(status().isAccepted())
@@ -203,19 +225,23 @@ class ContextPilotApplicationTests {
         http.perform(get("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{execucaoId}",
                         espacoId, conjuntoId, execucaoBaseId).with(usuario("ana")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.casosAprovados").value(1))
-                .andExpect(jsonPath("$.casosProcessados").value(1))
+                .andExpect(jsonPath("$.casosAprovados").value(2))
+                .andExpect(jsonPath("$.casosProcessados").value(2))
                 .andExpect(jsonPath("$.taxaAcerto").value(1.0))
                 .andExpect(jsonPath("$.recallMedio").value(1.0))
                 .andExpect(jsonPath("$.precisaoMedia").value(1.0))
                 .andExpect(jsonPath("$.mrrMedio").value(1.0))
-                .andExpect(jsonPath("$.resultados[0].orcamentoRespeitado").value(true));
+                .andExpect(jsonPath("$.resultados[0].orcamentoRespeitado").value(true))
+                .andExpect(jsonPath("$.resultadosTruncados").value(true));
         assertThat(json.readTree(execucaoBase).path("estado").asText()).isEqualTo("CONCLUIDA");
 
         String agendamentoAtual = http.perform(post(
                         "/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
-                        .with(usuario("ana")))
+                        .with(usuario("ana"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"execucaoBaseId\":\"" + execucaoBaseId + "\"}"))
                 .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.execucaoBaseId").value(execucaoBaseId.toString()))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         UUID execucaoAtualId = UUID.fromString(json.readTree(agendamentoAtual).path("id").asText());
         aguardarExecucao(espacoId, conjuntoId, execucaoAtualId, "CONCLUIDA");
@@ -224,6 +250,18 @@ class ContextPilotApplicationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.regressao").value(false))
                 .andExpect(jsonPath("$.deltaRecall").value(0.0));
+        http.perform(get("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes",
+                        espacoId, conjuntoId).with(usuario("ana")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].resultados").isEmpty())
+                .andExpect(jsonPath("$[0].resultadosTruncados").value(true));
+        http.perform(get("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{execucaoId}/resultados",
+                        espacoId, conjuntoId, execucaoAtualId).with(usuario("ana"))
+                        .param("pagina", "0").param("tamanho", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.itens.length()").value(1))
+                .andExpect(jsonPath("$.totalElementos").value(2))
+                .andExpect(jsonPath("$.totalPaginas").value(2));
 
         Integer eventos = banco.sql("SELECT COUNT(*) FROM eventos_auditoria WHERE espaco_id = :espacoId")
                 .param("espacoId", espacoId).query(Integer.class).single();

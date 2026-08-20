@@ -13,7 +13,7 @@
 
     <groupId>br.com.contextpilot</groupId>
     <artifactId>assistente-conhecimento</artifactId>
-    <version>1.4.0</version>
+    <version>1.5.0</version>
     <name>Assistente de Conhecimento</name>
     <description>Plataforma de conhecimento corporativo com RAG seguro, fontes verificaveis e MCP</description>
     <url>https://github.com/Mateusmith/assistente-conhecimento</url>

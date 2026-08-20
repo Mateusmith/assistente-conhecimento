@@ -110,6 +110,24 @@
         {"expr": "sum(rate(contextpilot_conversas_idempotencia_total[5m]))", "legendFormat": "retry reutilizado", "refId": "C"}
       ],
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34}
+    },
+    {
+      "type": "stat",
+      "title": "Imagens descritas por visao",
+      "targets": [{"expr": "sum(contextpilot_visao_total{resultado=\"sucesso\"})", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 42}
+    },
+    {
+      "type": "stat",
+      "title": "Avaliacoes aguardando worker",
+      "targets": [{"expr": "max(contextpilot_avaliacao_fila_pendentes)", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 42}
+    },
+    {
+      "type": "stat",
+      "title": "Avaliacoes com lease expirado",
+      "targets": [{"expr": "max(contextpilot_avaliacao_leases_expirados)", "refId": "A"}],
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 42}
     }
   ],
   "schemaVersion": 39,
@@ -118,5 +136,5 @@
   "time": {"from": "now-1h", "to": "now"},
   "title": "Assistente de Conhecimento - Operacao",
   "uid": "assistente-conhecimento-operacao",
-  "version": 4
+  "version": 5
 }

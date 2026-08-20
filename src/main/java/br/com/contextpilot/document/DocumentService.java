@@ -41,6 +41,7 @@ public class DocumentService {
     private final ObjectStorage objetos;
     private final DocumentContentStorage conteudos;
     private final MalwareScanner antivirus;
+    private final ImageInspector imagens;
     private final ObjectMapper json;
     private final GovernanceService governanca;
     private final Clock relogio;
@@ -53,6 +54,7 @@ public class DocumentService {
             ObjectStorage objetos,
             DocumentContentStorage conteudos,
             MalwareScanner antivirus,
+            ImageInspector imagens,
             ObjectMapper json,
             GovernanceService governanca,
             Clock relogio,
@@ -63,6 +65,7 @@ public class DocumentService {
         this.objetos = objetos;
         this.conteudos = conteudos;
         this.antivirus = antivirus;
+        this.imagens = imagens;
         this.json = json;
         this.governanca = governanca;
         this.relogio = relogio;
@@ -178,19 +181,36 @@ public class DocumentService {
         if (pdf && nome.endsWith(".pdf")) {
             return "application/pdf";
         }
-        if (!pdf && nome.endsWith(".md")) {
+        boolean png = conteudo.length >= 8
+                && (conteudo[0] & 0xff) == 0x89 && conteudo[1] == 'P' && conteudo[2] == 'N'
+                && conteudo[3] == 'G' && (conteudo[4] & 0xff) == 0x0d && (conteudo[5] & 0xff) == 0x0a
+                && (conteudo[6] & 0xff) == 0x1a && (conteudo[7] & 0xff) == 0x0a;
+        if (png && nome.endsWith(".png")) {
+            imagens.validar(conteudo, "image/png");
+            return "image/png";
+        }
+        boolean jpeg = conteudo.length >= 3
+                && (conteudo[0] & 0xff) == 0xff && (conteudo[1] & 0xff) == 0xd8
+                && (conteudo[2] & 0xff) == 0xff;
+        if (jpeg && (nome.endsWith(".jpg") || nome.endsWith(".jpeg"))) {
+            imagens.validar(conteudo, "image/jpeg");
+            return "image/jpeg";
+        }
+        if (!pdf && !png && !jpeg && nome.endsWith(".md")) {
             return "text/markdown";
         }
-        if (!pdf && nome.endsWith(".txt")) {
+        if (!pdf && !png && !jpeg && nome.endsWith(".txt")) {
             return "text/plain";
         }
-        throw new BusinessRuleException("Envie um arquivo PDF, TXT ou Markdown valido.");
+        throw new BusinessRuleException("Envie um arquivo PDF, TXT, Markdown, PNG ou JPEG valido.");
     }
 
     private String normalizarNome(String nomeOriginal, String tipoMime) {
         String extensao = switch (tipoMime) {
             case "application/pdf" -> ".pdf";
             case "text/markdown" -> ".md";
+            case "image/png" -> ".png";
+            case "image/jpeg" -> ".jpg";
             default -> ".txt";
         };
         if (nomeOriginal == null || nomeOriginal.isBlank()) {

@@ -1,0 +1,44 @@
+services:
+  ollama:
+    image: ollama/ollama:0.32.15
+    ports:
+      - "11434:11434"
+    volumes:
+      - dados-ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  modelos-ollama:
+    image: ollama/ollama:0.32.15
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      MODELO_CHAT: ${OLLAMA_CHAT_MODEL:-gemma3:4b}
+      MODELO_EMBEDDING: ${OLLAMA_EMBEDDING_MODEL:-all-minilm}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        ollama pull "$${MODELO_CHAT}" &&
+        ollama pull "$${MODELO_EMBEDDING}"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  aplicacao:
+    environment:
+      CONTEXT_PILOT_PROVEDOR_IA: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      CONTEXT_PILOT_MODELO_CHAT: ${OLLAMA_CHAT_MODEL:-gemma3:4b}
+      CONTEXT_PILOT_MODELO_EMBEDDING: ${OLLAMA_EMBEDDING_MODEL:-all-minilm}
+      VISION_ENABLED: "true"
+      VISION_MODEL: ${OLLAMA_VISION_MODEL:-gemma3:4b}
+      VISION_ALLOW_EXTERNAL_PROVIDER: "false"
+    depends_on:
+      modelos-ollama:
+        condition: service_completed_successfully
+
+volumes:
+  dados-ollama:

@@ -14,6 +14,7 @@ import br.com.contextpilot.evaluation.EvaluationModels.ConjuntoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.ExecucaoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.ResultadoCaso;
 import br.com.contextpilot.evaluation.EvaluationModels.TrabalhoAvaliacao;
+import br.com.contextpilot.evaluation.EvaluationModels.ResumoResultados;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -126,16 +127,30 @@ class EvaluationRepository {
                 .list();
     }
 
-    void agendarExecucao(UUID id, UUID conjuntoId, String usuarioId, int total, Instant instante) {
+    int contarCasos(UUID conjuntoId) {
+        return banco.sql("SELECT COUNT(*) FROM casos_avaliacao WHERE conjunto_id = :conjuntoId")
+                .param("conjuntoId", conjuntoId)
+                .query(Integer.class)
+                .single();
+    }
+
+    void agendarExecucao(
+            UUID id,
+            UUID conjuntoId,
+            String usuarioId,
+            int total,
+            UUID execucaoBaseId,
+            Instant instante) {
         banco.sql("""
                         INSERT INTO execucoes_avaliacao
-                            (id, conjunto_id, executada_por, estado, total_casos, iniciada_em)
-                        VALUES (:id, :conjuntoId, :usuarioId, 'PENDENTE', :total, :instante)
+                            (id, conjunto_id, executada_por, estado, total_casos, execucao_base_id, iniciada_em)
+                        VALUES (:id, :conjuntoId, :usuarioId, 'PENDENTE', :total, :execucaoBaseId, :instante)
                         """)
                 .param("id", id)
                 .param("conjuntoId", conjuntoId)
                 .param("usuarioId", usuarioId)
                 .param("total", total)
+                .param("execucaoBaseId", execucaoBaseId, java.sql.Types.OTHER)
                 .param("instante", instante(instante))
                 .update();
     }
@@ -152,7 +167,8 @@ class EvaluationRepository {
                          WHERE e.cancelamento_solicitado = FALSE
                            AND (
                                e.estado = 'PENDENTE'
-                               OR (e.estado = 'EXECUTANDO' AND e.bloqueado_ate < :agora)
+                               OR (e.estado = 'EXECUTANDO'
+                                   AND (e.trabalhador_id IS NULL OR e.bloqueado_ate < :agora))
                            )
                          ORDER BY e.iniciada_em, e.id
                          FOR UPDATE OF e SKIP LOCKED
@@ -178,7 +194,7 @@ class EvaluationRepository {
         return trabalho;
     }
 
-    List<CasoAvaliacao> listarCasosPendentes(UUID conjuntoId, UUID execucaoId) {
+    List<CasoAvaliacao> listarCasosPendentes(UUID conjuntoId, UUID execucaoId, int limite) {
         return banco.sql("""
                         SELECT c.id, c.conjunto_id, c.pergunta, c.termos_esperados::text,
                                c.documentos_esperados::text, c.deve_recusar,
@@ -189,10 +205,12 @@ class EvaluationRepository {
                                SELECT 1 FROM resultados_avaliacao r
                                 WHERE r.execucao_id = :execucaoId AND r.caso_id = c.id
                            )
-                         ORDER BY c.criado_em, c.id
+                          ORDER BY c.criado_em, c.id
+                          LIMIT :limite
                         """)
                 .param("conjuntoId", conjuntoId)
                 .param("execucaoId", execucaoId)
+                .param("limite", limite)
                 .query((rs, linha) -> new CasoAvaliacao(
                         rs.getObject("id", UUID.class),
                         rs.getObject("conjunto_id", UUID.class),
@@ -203,6 +221,36 @@ class EvaluationRepository {
                         rs.getObject("latencia_maxima_ms", Long.class),
                         rs.getBigDecimal("custo_maximo_usd")))
                 .list();
+    }
+
+    boolean possuiCasosPendentes(UUID conjuntoId, UUID execucaoId) {
+        return banco.sql("""
+                        SELECT EXISTS (
+                            SELECT 1
+                              FROM casos_avaliacao c
+                             WHERE c.conjunto_id = :conjuntoId
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM resultados_avaliacao r
+                                    WHERE r.execucao_id = :execucaoId AND r.caso_id = c.id
+                               )
+                        )
+                        """)
+                .param("conjuntoId", conjuntoId)
+                .param("execucaoId", execucaoId)
+                .query(Boolean.class)
+                .single();
+    }
+
+    void liberarLote(UUID execucaoId, String trabalhadorId, Instant instante) {
+        banco.sql("""
+                        UPDATE execucoes_avaliacao
+                           SET trabalhador_id = NULL, bloqueado_ate = NULL, ultimo_lote_em = :instante
+                         WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
+                        """)
+                .param("id", execucaoId)
+                .param("trabalhadorId", trabalhadorId)
+                .param("instante", instante(instante))
+                .update();
     }
 
     void renovarLease(UUID execucaoId, String trabalhadorId, Instant bloqueadoAte) {
@@ -242,9 +290,18 @@ class EvaluationRepository {
         banco.sql("""
                         UPDATE execucoes_avaliacao
                            SET cancelamento_solicitado = TRUE,
-                               estado = CASE WHEN estado = 'PENDENTE' THEN 'CANCELADA' ELSE estado END,
-                               finalizada_em = CASE WHEN estado = 'PENDENTE' THEN :instante ELSE finalizada_em END,
-                               bloqueado_ate = CASE WHEN estado = 'PENDENTE' THEN NULL ELSE bloqueado_ate END
+                               estado = CASE
+                                   WHEN estado = 'PENDENTE' OR trabalhador_id IS NULL THEN 'CANCELADA'
+                                   ELSE estado
+                               END,
+                               finalizada_em = CASE
+                                   WHEN estado = 'PENDENTE' OR trabalhador_id IS NULL THEN :instante
+                                   ELSE finalizada_em
+                               END,
+                               bloqueado_ate = CASE
+                                   WHEN estado = 'PENDENTE' OR trabalhador_id IS NULL THEN NULL
+                                   ELSE bloqueado_ate
+                               END
                          WHERE id = :id AND estado IN ('PENDENTE', 'EXECUTANDO')
                         """)
                 .param("id", execucaoId)
@@ -255,7 +312,8 @@ class EvaluationRepository {
     void cancelarExecucao(UUID execucaoId, String trabalhadorId, Instant instante) {
         banco.sql("""
                         UPDATE execucoes_avaliacao
-                           SET estado = 'CANCELADA', finalizada_em = :instante, bloqueado_ate = NULL
+                           SET estado = 'CANCELADA', finalizada_em = :instante,
+                               trabalhador_id = NULL, bloqueado_ate = NULL
                          WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
                         """)
                 .param("id", execucaoId)
@@ -293,6 +351,49 @@ class EvaluationRepository {
                 .update();
     }
 
+    ResumoResultados resumirResultados(UUID execucaoId) {
+        return banco.sql("""
+                        SELECT COUNT(*)::integer AS total,
+                               COUNT(*) FILTER (WHERE r.aprovado)::integer AS aprovados,
+                               COALESCE(AVG(r.pontuacao_fontes), 0) AS recall_medio,
+                               COALESCE(AVG(r.precisao_fontes), 0) AS precisao_media,
+                               COALESCE(AVG(r.mrr), 0) AS mrr_medio,
+                               COALESCE(PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY r.latencia_ms), 0)
+                                   AS latencia_p95_ms,
+                               COALESCE(SUM(r.custo_usd), 0) AS custo_total_usd,
+                               (
+                                   SELECT q.modelo_embedding
+                                     FROM resultados_avaliacao r2
+                                     JOIN consultas_rag q ON q.id = r2.consulta_id
+                                    WHERE r2.execucao_id = :execucaoId AND q.modelo_embedding IS NOT NULL
+                                    ORDER BY q.criada_em DESC
+                                    LIMIT 1
+                               ) AS modelo_embedding,
+                               (
+                                   SELECT q.provedor_ia
+                                     FROM resultados_avaliacao r2
+                                     JOIN consultas_rag q ON q.id = r2.consulta_id
+                                    WHERE r2.execucao_id = :execucaoId
+                                    ORDER BY q.criada_em DESC
+                                    LIMIT 1
+                               ) AS provedor_ia
+                          FROM resultados_avaliacao r
+                         WHERE r.execucao_id = :execucaoId
+                        """)
+                .param("execucaoId", execucaoId)
+                .query((rs, linha) -> {
+                    int total = rs.getInt("total");
+                    int aprovados = rs.getInt("aprovados");
+                    return new ResumoResultados(
+                            total, aprovados, total == 0 ? 0.0 : (double) aprovados / total,
+                            rs.getDouble("recall_medio"), rs.getDouble("precisao_media"),
+                            rs.getDouble("mrr_medio"), rs.getLong("latencia_p95_ms"),
+                            rs.getBigDecimal("custo_total_usd"), rs.getString("modelo_embedding"),
+                            rs.getString("provedor_ia"));
+                })
+                .single();
+    }
+
     void concluirExecucao(
             UUID id,
             int aprovados,
@@ -313,8 +414,8 @@ class EvaluationRepository {
                                precisao_media = :precisaoMedia, mrr_medio = :mrrMedio,
                                latencia_p95_ms = :latenciaP95Ms, custo_total_usd = :custoTotalUsd,
                                modelo_embedding = :modeloEmbedding, provedor_ia = :provedorIa,
-                                casos_processados = total_casos, finalizada_em = :instante,
-                                bloqueado_ate = NULL
+                                 casos_processados = total_casos, finalizada_em = :instante,
+                                 trabalhador_id = NULL, bloqueado_ate = NULL
                          WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
                         """)
                 .param("id", id)
@@ -336,7 +437,7 @@ class EvaluationRepository {
         banco.sql("""
                         UPDATE execucoes_avaliacao
                            SET estado = 'FALHOU', erro = :erro, finalizada_em = :instante,
-                               bloqueado_ate = NULL
+                               trabalhador_id = NULL, bloqueado_ate = NULL
                          WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
                         """)
                 .param("id", id)
@@ -346,14 +447,14 @@ class EvaluationRepository {
                 .update();
     }
 
-    Optional<ExecucaoAvaliacao> buscarExecucao(UUID id, UUID conjuntoId) {
+    Optional<ExecucaoAvaliacao> buscarExecucao(UUID id, UUID conjuntoId, int limiteResultados) {
         Optional<CabecalhoExecucao> cabecalho = banco.sql("""
                         SELECT id, conjunto_id, estado, erro, total_casos, casos_processados,
                                casos_aprovados, cancelamento_solicitado,
                                COALESCE(taxa_acerto, 0) AS taxa_acerto,
                                recall_medio, precisao_media, mrr_medio, latencia_p95_ms,
-                               custo_total_usd, modelo_embedding, provedor_ia,
-                               iniciada_em, finalizada_em
+                                custo_total_usd, modelo_embedding, provedor_ia, execucao_base_id,
+                                iniciada_em, finalizada_em, ultimo_lote_em
                           FROM execucoes_avaliacao
                          WHERE id = :id AND conjunto_id = :conjuntoId
                         """)
@@ -378,29 +479,50 @@ class EvaluationRepository {
                             rs.getBigDecimal("custo_total_usd"),
                             rs.getString("modelo_embedding"),
                             rs.getString("provedor_ia"),
+                            rs.getObject("execucao_base_id", UUID.class),
                             rs.getTimestamp("iniciada_em").toInstant(),
-                            finalizada == null ? null : finalizada.toInstant());
+                            finalizada == null ? null : finalizada.toInstant(),
+                            rs.getTimestamp("ultimo_lote_em") == null
+                                    ? null : rs.getTimestamp("ultimo_lote_em").toInstant());
                 })
                 .optional();
-        return cabecalho.map(valor -> new ExecucaoAvaliacao(
-                valor.id(), valor.conjuntoId(), valor.estado(), valor.erro(),
-                valor.totalCasos(), valor.casosProcessados(), valor.casosAprovados(),
-                valor.cancelamentoSolicitado(),
-                valor.taxaAcerto(), valor.recallMedio(), valor.precisaoMedia(), valor.mrrMedio(),
-                valor.latenciaP95Ms(), valor.custoTotalUsd(), valor.modeloEmbedding(), valor.provedorIa(),
-                valor.iniciadaEm(), valor.finalizadaEm(), listarResultados(valor.id())));
+        return cabecalho.map(valor -> montarExecucao(valor, limiteResultados));
     }
 
-    List<ResultadoCaso> listarResultados(UUID execucaoId) {
+    List<ExecucaoAvaliacao> listarExecucoes(UUID conjuntoId, int limite) {
+        return banco.sql("""
+                        SELECT id, conjunto_id, estado, erro, total_casos, casos_processados,
+                               casos_aprovados, cancelamento_solicitado,
+                               COALESCE(taxa_acerto, 0) AS taxa_acerto,
+                               recall_medio, precisao_media, mrr_medio, latencia_p95_ms,
+                               custo_total_usd, modelo_embedding, provedor_ia, execucao_base_id,
+                               iniciada_em, finalizada_em, ultimo_lote_em
+                          FROM execucoes_avaliacao
+                         WHERE conjunto_id = :conjuntoId
+                         ORDER BY iniciada_em DESC
+                         LIMIT :limite
+                        """)
+                .param("conjuntoId", conjuntoId)
+                .param("limite", limite)
+                .query((rs, linha) -> mapearCabecalho(rs))
+                .list().stream()
+                .map(cabecalho -> montarExecucao(cabecalho, 0))
+                .toList();
+    }
+
+    List<ResultadoCaso> listarResultados(UUID execucaoId, int limite, int deslocamento) {
         return banco.sql("""
                         SELECT caso_id, consulta_id, aprovado, pontuacao_termos,
                                pontuacao_fontes, precisao_fontes, mrr, recusa_correta,
                                latencia_ms, custo_usd, orcamento_respeitado, detalhes
                           FROM resultados_avaliacao
-                         WHERE execucao_id = :execucaoId
-                         ORDER BY caso_id
+                          WHERE execucao_id = :execucaoId
+                          ORDER BY caso_id
+                          LIMIT :limite OFFSET :deslocamento
                         """)
                 .param("execucaoId", execucaoId)
+                .param("limite", limite)
+                .param("deslocamento", deslocamento)
                 .query((rs, linha) -> new ResultadoCaso(
                         rs.getObject("caso_id", UUID.class),
                         rs.getObject("consulta_id", UUID.class),
@@ -415,6 +537,42 @@ class EvaluationRepository {
                         rs.getBoolean("orcamento_respeitado"),
                         rs.getString("detalhes")))
                 .list();
+    }
+
+    long contarResultados(UUID execucaoId) {
+        return banco.sql("SELECT COUNT(*) FROM resultados_avaliacao WHERE execucao_id = :execucaoId")
+                .param("execucaoId", execucaoId)
+                .query(Long.class)
+                .single();
+    }
+
+    private ExecucaoAvaliacao montarExecucao(CabecalhoExecucao valor, int limiteResultados) {
+        List<ResultadoCaso> resultados = limiteResultados <= 0
+                ? List.of() : listarResultados(valor.id(), limiteResultados, 0);
+        return new ExecucaoAvaliacao(
+                valor.id(), valor.conjuntoId(), valor.estado(), valor.erro(),
+                valor.totalCasos(), valor.casosProcessados(), valor.casosAprovados(),
+                valor.cancelamentoSolicitado(),
+                valor.taxaAcerto(), valor.recallMedio(), valor.precisaoMedia(), valor.mrrMedio(),
+                valor.latenciaP95Ms(), valor.custoTotalUsd(), valor.modeloEmbedding(), valor.provedorIa(),
+                valor.execucaoBaseId(), valor.iniciadaEm(), valor.finalizadaEm(), valor.ultimoLoteEm(),
+                valor.casosProcessados() > resultados.size(), resultados);
+    }
+
+    private CabecalhoExecucao mapearCabecalho(java.sql.ResultSet rs) throws java.sql.SQLException {
+        var finalizada = rs.getTimestamp("finalizada_em");
+        var ultimoLote = rs.getTimestamp("ultimo_lote_em");
+        return new CabecalhoExecucao(
+                rs.getObject("id", UUID.class), rs.getObject("conjunto_id", UUID.class),
+                rs.getString("estado"), rs.getString("erro"), rs.getInt("total_casos"),
+                rs.getInt("casos_processados"), rs.getInt("casos_aprovados"),
+                rs.getBoolean("cancelamento_solicitado"), rs.getDouble("taxa_acerto"),
+                rs.getDouble("recall_medio"), rs.getDouble("precisao_media"), rs.getDouble("mrr_medio"),
+                rs.getLong("latencia_p95_ms"), rs.getBigDecimal("custo_total_usd"),
+                rs.getString("modelo_embedding"), rs.getString("provedor_ia"),
+                rs.getObject("execucao_base_id", UUID.class), rs.getTimestamp("iniciada_em").toInstant(),
+                finalizada == null ? null : finalizada.toInstant(),
+                ultimoLote == null ? null : ultimoLote.toInstant());
     }
 
     private String serializar(Object valor) {
@@ -454,7 +612,9 @@ class EvaluationRepository {
             BigDecimal custoTotalUsd,
             String modeloEmbedding,
             String provedorIa,
+            UUID execucaoBaseId,
             Instant iniciadaEm,
-            Instant finalizadaEm) {
+            Instant finalizadaEm,
+            Instant ultimoLoteEm) {
     }
 }

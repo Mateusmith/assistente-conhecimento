@@ -3,6 +3,7 @@ package br.com.contextpilot.document;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.ByteArrayOutputStream;
+import java.awt.image.BufferedImage;
 
 import br.com.contextpilot.document.DocumentModels.OrigemTexto;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -38,6 +39,27 @@ class TextExtractorTest {
         assertThat(resultado.texto()).contains("reconhecido por OCR");
     }
 
+    @Test
+    void deveExtrairTextoDeImagemComOcr() throws Exception {
+        OcrEngine ocr = new OcrEngine() {
+            @Override
+            public ResultadoOcr extrair(PDDocument documento) {
+                throw new AssertionError("PDF nao deveria ser processado.");
+            }
+
+            @Override
+            public ResultadoOcr extrair(BufferedImage imagem) {
+                return new ResultadoOcr("Numero do pedido 8742 e situacao aprovada.", 1);
+            }
+        };
+
+        var resultado = new TextExtractor(ocr).extrair("image/png", pngValido());
+
+        assertThat(resultado.origem()).isEqualTo(OrigemTexto.OCR);
+        assertThat(resultado.paginasOcr()).isOne();
+        assertThat(resultado.texto()).contains("pedido 8742");
+    }
+
     private byte[] pdfComTexto(String texto) throws Exception {
         try (var documento = new PDDocument(); var saida = new ByteArrayOutputStream()) {
             var pagina = new PDPage();
@@ -58,6 +80,14 @@ class TextExtractorTest {
         try (var documento = new PDDocument(); var saida = new ByteArrayOutputStream()) {
             documento.addPage(new PDPage());
             documento.save(saida);
+            return saida.toByteArray();
+        }
+    }
+
+    private byte[] pngValido() throws Exception {
+        var imagem = new BufferedImage(20, 20, BufferedImage.TYPE_INT_RGB);
+        try (var saida = new ByteArrayOutputStream()) {
+            javax.imageio.ImageIO.write(imagem, "png", saida);
             return saida.toByteArray();
         }
     }

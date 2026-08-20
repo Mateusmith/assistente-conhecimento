@@ -16,7 +16,7 @@ riscos e decisoes do produto. Consulte
 | Filtros de metadados | Implementado antes da recuperacao, incluindo datas, MIME, tags e documentos |
 | Streaming | Implementado como SSE por etapas; tokens crus nao saem antes da validacao |
 | Avaliacao de relevancia | Evoluido para termos, recall, precisao, MRR, p95, custo e baseline |
-| Avaliacao em escala | Jobs assincronos com progresso, cancelamento, lease, retomada e `SKIP LOCKED` |
+| Avaliacao em escala | Importacao em massa, jobs em lotes, paginacao, progresso, cancelamento, lease e retomada |
 | Saida estruturada | A API ja retorna records tipados para resposta, fontes, avaliacao e erros |
 | Ingestao/ETL | Implementado com fila, leases, ClamAV, S3, OCR, fragmentacao e embeddings |
 | Observabilidade | Implementado com metricas de negocio, traces, SLOs, alertas, dashboard e runbooks |
@@ -25,7 +25,9 @@ riscos e decisoes do produto. Consulte
 | Privacidade no provedor | Tokenizacao reversivel de identificadores e segredos antes da chamada externa |
 | Proveniencia | Indice, estrategia, versao e hash do prompt, candidatos e fontes por consulta |
 | Recuperacao contextual | MMR, diversidade e vizinhos com tenant, ACL e risco reaplicados no SQL |
-| Multimodal visual | OCR cobre PDFs digitalizados; imagem nativa e modelo de visao permanecem no roadmap |
+| Multimodal visual | PNG/JPEG com assinatura validada, OCR, OpenAI/Ollama opcional, custo e citacao |
+| IA local generativa | Ollama para chat, embeddings e visao por overlay Docker e configuracao |
+| Contrato de provedores | Local, OpenAI e Ollama validam a mesma saida observavel e dimensao de embedding |
 | MCP cliente | Adiado ate existir uma fonte remota com contrato, autenticacao e utilidade claras |
 | Tool calling com efeitos | Nao adotado sem aprovacao humana, idempotencia e autorizacao por acao |
 | Multiagentes | Nao adotado: aumentaria custo e complexidade sem um fluxo de negocio que os justifique |
@@ -44,10 +46,9 @@ riscos e decisoes do produto. Consulte
 
 ## Proximas evolucoes coerentes
 
-1. Upload PNG/JPEG, OCR de imagem nativa e um provedor de visao opcional.
-2. Perfil local com Ollama e teste de contrato entre provedores.
-3. DLP/NER corporativo opcional para dados que nao possuem formato deterministico.
-4. Conector MCP cliente somente quando houver uma fonte corporativa real para integrar.
+1. DLP/NER corporativo opcional para dados que nao possuem formato deterministico.
+2. Benchmark multimodal com imagens de dominio e ground truth versionado.
+3. Conector MCP cliente somente quando houver uma fonte corporativa real para integrar.
 
-Esses itens nao bloqueiam a versao 1.4. Eles formam um roadmap tecnico sem transformar
+Esses itens nao bloqueiam a versao 1.5. Eles formam um roadmap tecnico sem transformar
 o projeto em uma demonstracao de recursos desconectados do problema principal.

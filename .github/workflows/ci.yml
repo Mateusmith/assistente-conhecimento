@@ -48,6 +48,8 @@ jobs:
       - name: Baixar codigo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validar Compose
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
+          docker compose -f compose.yml -f compose.ollama.yml config --quiet
       - name: Construir imagem
         run: docker build --tag assistente-conhecimento:${{ github.sha }} .

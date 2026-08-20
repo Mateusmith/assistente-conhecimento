@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $arquivo = Join-Path $PSScriptRoot "..\postman\politica-reembolso.md"
 $arquivoOcr = Join-Path ([System.IO.Path]::GetTempPath()) "assistente-conhecimento-ocr-$([guid]::NewGuid()).pdf"
+$arquivoImagem = Join-Path ([System.IO.Path]::GetTempPath()) "assistente-conhecimento-imagem-$([guid]::NewGuid()).png"
 $arquivoAntivirus = Join-Path ([System.IO.Path]::GetTempPath()) "assistente-conhecimento-antivirus-$([guid]::NewGuid()).txt"
 . "$PSScriptRoot\New-OcrFixture.ps1"
 
@@ -59,7 +60,7 @@ function Esperar-ExecucaoAvaliacao(
     throw "Tempo limite da avaliacao $execucaoId excedido."
 }
 
-Write-Host "[1/23] Validando saude, autenticacao e audiencia JWT"
+Write-Host "[1/24] Validando saude, autenticacao e audiencia JWT"
 $saude = Invoke-RestMethod "$BaseUrl/actuator/health"
 if ($saude.status -ne "UP") { throw "Aplicacao indisponivel." }
 $tokenAna = Obter-Token "ana"
@@ -67,13 +68,13 @@ $tokenCarla = Obter-Token "carla"
 $audiencias = @((Obter-PayloadJwt $tokenAna).aud)
 if ("contextpilot-api" -notin $audiencias) { throw "Token nao contem a audiencia da API." }
 
-Write-Host "[2/23] Criando espaco e membro"
+Write-Host "[2/24] Criando espaco e membro"
 $espaco = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos" -Headers (Cabecalho $tokenAna) `
     -ContentType "application/json" -Body (@{ nome = "Operacoes Financeiras $(Get-Date -Format HHmmss)"; descricao = "Carga automatizada" } | ConvertTo-Json)
 Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/membros" -Headers (Cabecalho $tokenAna) `
     -ContentType "application/json" -Body '{"usuarioId":"carla","papel":"LEITOR"}' | Out-Null
 
-Write-Host "[3/23] Enviando documento, ClamAV, MinIO e metadados"
+Write-Host "[3/24] Enviando documento, ClamAV, MinIO e metadados"
 $documento = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos" `
     -Headers (Cabecalho $tokenAna) -Form @{
         titulo = "Politica de reembolso"
@@ -98,7 +99,7 @@ $conteudoBaixado = Invoke-WebRequest "$BaseUrl/api/v1/espacos/$($espaco.id)/docu
     -Headers (Cabecalho $tokenAna)
 if ($conteudoBaixado.Content -notmatch "30 dias") { throw "Documento nao foi recuperado corretamente do MinIO." }
 
-Write-Host "[4/23] Provando que a ACL bloqueia o documento"
+Write-Host "[4/24] Provando que a ACL bloqueia o documento"
 try {
     Invoke-RestMethod "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos/$($documento.id)" -Headers (Cabecalho $tokenCarla) | Out-Null
     throw "Documento restrito ficou visivel sem permissao."
@@ -109,7 +110,7 @@ $recusa = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco
     -ContentType "application/json" -Body '{"pergunta":"Qual e o prazo para solicitar reembolso?"}'
 if (!$recusa.recusada -or $recusa.fontes.Count -ne 0) { throw "A consulta sem permissao vazou contexto." }
 
-Write-Host "[5/23] Concedendo acesso e repetindo a consulta"
+Write-Host "[5/24] Concedendo acesso e repetindo a consulta"
 Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos/$($documento.id)/permissoes" `
     -Headers (Cabecalho $tokenAna) -ContentType "application/json" -Body '{"usuarioId":"carla","nivel":"LEITURA"}' | Out-Null
 $resposta = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/consultas" -Headers (Cabecalho $tokenCarla) `
@@ -122,11 +123,11 @@ if ($resposta.impressaoPrompt.Length -ne 64 -or $resposta.candidatosRecuperados 
     throw "Resposta RAG nao possui o rastro de explicabilidade esperado."
 }
 
-Write-Host "[6/23] Registrando feedback"
+Write-Host "[6/24] Registrando feedback"
 Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/consultas/$($resposta.consultaId)/feedback" `
     -Headers (Cabecalho $tokenCarla) -ContentType "application/json" -Body '{"util":true,"comentario":"Validado pelo smoke test"}' | Out-Null
 
-Write-Host "[7/23] Executando avaliacao quantitativa e comparando baseline"
+Write-Host "[7/24] Executando avaliacao quantitativa e comparando baseline"
 $conjunto = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes" -Headers (Cabecalho $tokenAna) `
     -ContentType "application/json" -Body '{"nome":"Regressao financeira","descricao":"Carga automatizada"}'
 $caso = @{
@@ -139,19 +140,24 @@ $caso = @{
 }
 Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/casos" `
     -Headers (Cabecalho $tokenAna) -ContentType "application/json" -Body ($caso | ConvertTo-Json) | Out-Null
-$agendamentoBase = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" -Headers (Cabecalho $tokenAna)
+$agendamentoBase = Invoke-RestMethod -Method Post `
+    -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" `
+    -Headers (Cabecalho $tokenAna) -ContentType "application/json" -Body '{}'
 $execucaoBase = Esperar-ExecucaoAvaliacao $espaco.id $conjunto.id $agendamentoBase.id $tokenAna
-$agendamento = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" -Headers (Cabecalho $tokenAna)
+$agendamento = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" `
+    -Headers (Cabecalho $tokenAna) -ContentType "application/json" `
+    -Body (@{ execucaoBaseId = $execucaoBase.id } | ConvertTo-Json)
 $execucao = Esperar-ExecucaoAvaliacao $espaco.id $conjunto.id $agendamento.id $tokenAna
 $comparacaoAvaliacao = Invoke-RestMethod `
     "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes/$($execucao.id)/comparacoes/$($execucaoBase.id)" `
     -Headers (Cabecalho $tokenAna)
 if ($execucao.taxaAcerto -ne 1 -or $execucao.recallMedio -ne 1 -or $execucao.precisaoMedia -ne 1 `
-        -or $execucao.mrrMedio -ne 1 -or $comparacaoAvaliacao.regressao) {
+        -or $execucao.mrrMedio -ne 1 -or $comparacaoAvaliacao.regressao `
+        -or $execucao.execucaoBaseId -ne $execucaoBase.id) {
     throw "A avaliacao quantitativa ou a comparacao com baseline falhou."
 }
 
-Write-Host "[8/23] Validando conversa, memoria e idempotencia"
+Write-Host "[8/24] Validando conversa, memoria e idempotencia"
 $conversa = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/conversas" `
     -Headers (Cabecalho $tokenCarla) -ContentType "application/json" -Body '{"titulo":"Reembolso"}'
 $cabecalhoIdempotente = Cabecalho $tokenCarla
@@ -175,7 +181,7 @@ if ($interacao.resposta.consultaId -ne $interacaoRepetida.resposta.consultaId `
     throw "Memoria ou idempotencia da conversa nao foi comprovada."
 }
 
-Write-Host "[9/23] Validando streaming somente depois das fontes"
+Write-Host "[9/24] Validando streaming somente depois das fontes"
 $cabecalhoStreaming = Cabecalho $tokenCarla
 $cabecalhoStreaming["Accept"] = "text/event-stream"
 $cabecalhoStreaming["Idempotency-Key"] = "smoke-stream-001"
@@ -188,11 +194,11 @@ if ($stream.Content -notmatch 'event:fontes' -or $stream.Content -notmatch 'even
     throw "O fluxo SSE nao publicou fontes, resposta e conclusao."
 }
 
-Write-Host "[10/23] Validando auditoria"
+Write-Host "[10/24] Validando auditoria"
 $eventos = Invoke-RestMethod "$BaseUrl/api/v1/espacos/$($espaco.id)/auditoria" -Headers (Cabecalho $tokenAna)
 if ($eventos.Count -lt 6) { throw "Trilha de auditoria incompleta." }
 
-Write-Host "[11/23] Validando metricas protegidas"
+Write-Host "[11/24] Validando metricas protegidas"
 $semCredencial = Invoke-WebRequest "$BaseUrl/actuator/prometheus" -SkipHttpErrorCheck
 if ($semCredencial.StatusCode -ne 401) { throw "Metricas deveriam exigir autenticacao HTTP Basic." }
 $credencial = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("prometheus:contextpilot_metrics_local"))
@@ -202,7 +208,7 @@ Esperar-Metrica 'sum(contextpilot_rag_consultas_total)' "consultas RAG"
 Esperar-Metrica 'sum(contextpilot_antivirus_verificacoes_total{resultado="limpo"})' "antivirus"
 Esperar-Metrica 'sum(contextpilot_armazenamento_operacoes_total{operacao="gravar",resultado="sucesso"})' "armazenamento"
 
-Write-Host "[12/23] Validando servidor MCP"
+Write-Host "[12/24] Validando servidor MCP"
 $cabecalhosMcp = @{
     Authorization = "Bearer $tokenAna"
     Accept = "application/json, text/event-stream"
@@ -221,11 +227,11 @@ foreach ($ferramenta in $ferramentasEsperadas) {
     if ($ferramenta -notin $nomesFerramentas) { throw "Ferramenta MCP ausente: $ferramenta" }
 }
 
-Write-Host "[13/23] Preparando assinatura inofensiva de teste do antivirus"
+Write-Host "[13/24] Preparando assinatura inofensiva de teste do antivirus"
 $assinaturaTeste = 'X5O!P%@AP[4\PZX54(P^)7CC)7}' + '$EICAR-STANDARD-' + 'ANTIVIRUS-TEST-FILE!$H+H*'
 [System.IO.File]::WriteAllText($arquivoAntivirus, $assinaturaTeste, [System.Text.Encoding]::ASCII)
 
-Write-Host "[14/23] Provando bloqueio de malware antes da persistencia"
+Write-Host "[14/24] Provando bloqueio de malware antes da persistencia"
 $ameacaRejeitada = $false
 try {
     Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos" `
@@ -239,10 +245,10 @@ if (!$ameacaRejeitada) { throw "O ClamAV nao rejeitou a assinatura de teste espe
 $documentosAposAmeaca = @(Invoke-RestMethod "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos" -Headers (Cabecalho $tokenAna))
 if ($documentosAposAmeaca.Count -ne 1) { throw "O arquivo rejeitado deixou um registro persistido." }
 
-Write-Host "[15/23] Gerando PDF composto somente por imagem"
+Write-Host "[15/24] Gerando PDF composto somente por imagem"
 New-OcrFixture $arquivoOcr
 
-Write-Host "[16/23] Validando OCR real com Tesseract"
+Write-Host "[16/24] Validando OCR real com Tesseract"
 $documentoOcr = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos" `
     -Headers (Cabecalho $tokenAna) -Form @{ titulo = "Politica digitalizada"; visibilidade = "ESPACO"; arquivo = Get-Item $arquivoOcr }
 for ($tentativa = 0; $tentativa -lt 60; $tentativa++) {
@@ -256,26 +262,42 @@ if ($estadoOcr.estado -ne "PRONTO" -or $estadoOcr.origemTexto -ne "OCR" -or $est
     throw "O PDF digitalizado nao comprovou o fluxo OCR esperado."
 }
 
-Write-Host "[17/23] Comparando busca hibrida, semantica e textual"
+Write-Host "[17/24] Validando PNG nativo com assinatura, ClamAV, S3 e OCR"
+New-ImageFixture $arquivoImagem
+$documentoImagem = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos" `
+    -Headers (Cabecalho $tokenAna) -Form @{ titulo = "Comprovante visual"; visibilidade = "ESPACO"; arquivo = Get-Item $arquivoImagem }
+for ($tentativa = 0; $tentativa -lt 60; $tentativa++) {
+    Start-Sleep -Milliseconds 500
+    $estadoImagem = Invoke-RestMethod "$BaseUrl/api/v1/espacos/$($espaco.id)/documentos/$($documentoImagem.id)" -Headers (Cabecalho $tokenAna)
+    if ($estadoImagem.estado -eq "PRONTO") { break }
+    if ($estadoImagem.estado -eq "FALHOU") { throw "Imagem falhou: $($estadoImagem.erroProcessamento)" }
+}
+Remove-Item -LiteralPath $arquivoImagem -Force -ErrorAction SilentlyContinue
+if ($estadoImagem.estado -ne "PRONTO" -or $estadoImagem.tipoMime -ne "image/png" `
+        -or $estadoImagem.origemTexto -ne "OCR" -or $estadoImagem.paginasOcr -ne 1) {
+    throw "O PNG nao comprovou validacao e OCR nativos esperados."
+}
+
+Write-Host "[18/24] Comparando busca hibrida, semantica e textual"
 $comparacao = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/buscas/comparacoes" `
     -Headers (Cabecalho $tokenCarla) -ContentType "application/json" `
     -Body '{"pergunta":"Qual e o prazo para solicitar reembolso?","filtros":{"metadados":{"departamento":"financeiro"},"tags":["reembolso"]}}'
 if ($comparacao.resultados.Count -ne 3) { throw "A comparacao nao executou as tres estrategias." }
 
-Write-Host "[18/23] Consultando governanca, quotas e consumo"
+Write-Host "[19/24] Consultando governanca, quotas e consumo"
 $uso = Invoke-RestMethod "$BaseUrl/api/v1/espacos/$($espaco.id)/governanca/uso" -Headers (Cabecalho $tokenAna)
 if ($uso.armazenamentoUsadoBytes -le 0 -or $uso.consultasHoje -lt 3) {
     throw "O uso do espaco nao contabilizou armazenamento e consultas."
 }
 
-Write-Host "[19/23] Iniciando reindexacao blue-green"
+Write-Host "[20/24] Iniciando reindexacao blue-green"
 $indicesAntes = Invoke-RestMethod "$BaseUrl/api/v1/espacos/$($espaco.id)/indices-embedding" -Headers (Cabecalho $tokenAna)
 $indiceAnterior = $indicesAntes | Where-Object { $_.estado -eq "ATIVO" } | Select-Object -First 1
 $novoIndice = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/indices-embedding" `
     -Headers (Cabecalho $tokenAna) -ContentType "application/json" -Body '{"modelo":"local-hashing-v2"}'
 if ($novoIndice.estado -ne "CONSTRUINDO") { throw "A reindexacao nao iniciou em modo blue-green." }
 
-Write-Host "[20/23] Aguardando troca atomica do indice"
+Write-Host "[21/24] Aguardando troca atomica do indice"
 for ($tentativa = 0; $tentativa -lt 60; $tentativa++) {
     Start-Sleep -Milliseconds 500
     $indicesDepois = Invoke-RestMethod "$BaseUrl/api/v1/espacos/$($espaco.id)/indices-embedding" -Headers (Cabecalho $tokenAna)
@@ -293,7 +315,7 @@ if ($respostaV2.modeloEmbedding -ne "local-hashing-v2" -or $respostaV2.recusada)
     throw "A consulta nao usou o novo indice ativo."
 }
 
-Write-Host "[21/23] Validando rollback do indice"
+Write-Host "[22/24] Validando rollback do indice"
 $rollback = Invoke-RestMethod -Method Post `
     -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/indices-embedding/$($indiceAnterior.id)/ativacao" `
     -Headers (Cabecalho $tokenAna)
@@ -301,14 +323,14 @@ if ($rollback.estado -ne "ATIVO" -or $rollback.modelo -ne "local-hashing-v1") {
     throw "O rollback nao restaurou o indice anterior."
 }
 
-Write-Host "[22/23] Exportando dados pessoais de Carla"
+Write-Host "[23/24] Exportando dados pessoais de Carla"
 $exportacao = Invoke-RestMethod "$BaseUrl/api/v1/privacidade/exportacao" -Headers (Cabecalho $tokenCarla)
 if ($exportacao.usuarioId -ne "carla" -or $exportacao.espacos.Count -lt 1 `
         -or $exportacao.conversas.Count -lt 1) {
     throw "A exportacao LGPD nao retornou os dados esperados."
 }
 
-Write-Host "[23/23] Fluxo completo aprovado" -ForegroundColor Green
+Write-Host "[24/24] Fluxo completo aprovado" -ForegroundColor Green
 [pscustomobject]@{
     espacoId = $espaco.id
     documentoId = $documento.id
@@ -323,6 +345,7 @@ Write-Host "[23/23] Fluxo completo aprovado" -ForegroundColor Green
     ameacaRejeitada = $ameacaRejeitada
     documentoOcrId = $documentoOcr.id
     paginasOcr = $estadoOcr.paginasOcr
+    documentoImagemId = $documentoImagem.id
     estrategiasComparadas = $comparacao.resultados.Count
     indiceAtivado = $indiceV2.modelo
     rollbackValidado = $rollback.modelo

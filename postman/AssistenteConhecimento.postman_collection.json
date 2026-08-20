@@ -173,8 +173,18 @@
           "event": [{"listen": "test", "script": {"exec": ["pm.test('Caso criado', () => pm.response.to.have.status(201));"], "type": "text/javascript"}}]
         },
         {
+          "name": "Importar casos em massa",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_ana}}"}],
+            "body": {"mode": "raw", "raw": "{\n  \"casos\": [\n    {\n      \"pergunta\": \"Em quantos dias o reembolso deve ser solicitado?\",\n      \"termosEsperados\": [\"30 dias\"],\n      \"documentosEsperados\": [\"{{documento_id}}\"],\n      \"deveRecusar\": false,\n      \"latenciaMaximaMs\": 10000,\n      \"custoMaximoUsd\": 1\n    },\n    {\n      \"pergunta\": \"Qual e a cor do uniforme da equipe lunar?\",\n      \"termosEsperados\": [],\n      \"documentosEsperados\": [],\n      \"deveRecusar\": true,\n      \"latenciaMaximaMs\": 10000,\n      \"custoMaximoUsd\": 1\n    }\n  ]\n}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/casos/importacoes"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Importacao criada', () => pm.response.to.have.status(201));", "pm.test('Dois casos inseridos', () => pm.expect(pm.response.json().inseridos).to.eql(2));"], "type": "text/javascript"}}]
+        },
+        {
           "name": "Executar avaliacao base",
-          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
+          "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_ana}}"}], "body": {"mode": "raw", "raw": "{}"}, "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
           "event": [{"listen": "test", "script": {"exec": ["pm.test('Avaliacao base agendada', () => pm.response.to.have.status(202));", "const r = pm.response.json();", "pm.test('Job retornou identificador', () => pm.expect(r.id).to.be.a('string'));", "pm.environment.set('execucao_base_id', r.id);", "pm.environment.set('poll_base', '0');"], "type": "text/javascript"}}]
         },
         {
@@ -187,7 +197,7 @@
         },
         {
           "name": "Executar avaliacao atual",
-          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
+          "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_ana}}"}], "body": {"mode": "raw", "raw": "{\"execucaoBaseId\":\"{{execucao_base_id}}\"}"}, "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
           "event": [{"listen": "test", "script": {"exec": ["pm.test('Nova avaliacao agendada', () => pm.response.to.have.status(202));", "pm.environment.set('execucao_atual_id', pm.response.json().id);", "pm.environment.set('poll_atual', '0');"], "type": "text/javascript"}}]
         },
         {
@@ -202,6 +212,16 @@
           "name": "Comparar com baseline",
           "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes/{{execucao_atual_id}}/comparacoes/{{execucao_base_id}}"},
           "event": [{"listen": "test", "script": {"exec": ["pm.test('Comparacao concluida', () => pm.response.to.have.status(200));", "pm.test('Sem regressao', () => { const r = pm.response.json(); pm.expect(r.regressao).to.eql(false); pm.expect(r.deltaRecall).to.eql(0); });"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Consultar historico de execucoes",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes?limite=20"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Historico disponivel', () => pm.response.to.have.status(200));", "pm.test('Baseline vinculada', () => { const atual = pm.response.json().find(e => e.id === pm.environment.get('execucao_atual_id')); pm.expect(atual.execucaoBaseId).to.eql(pm.environment.get('execucao_base_id')); });"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Paginar resultados da avaliacao",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes/{{execucao_atual_id}}/resultados?pagina=0&tamanho=2"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Pagina de resultados disponivel', () => pm.response.to.have.status(200));", "pm.test('Paginacao limitada', () => { const r = pm.response.json(); pm.expect(r.itens.length).to.be.at.most(2); pm.expect(r.totalElementos).to.eql(3); });"], "type": "text/javascript"}}]
         },
         {
           "name": "Consultar auditoria",

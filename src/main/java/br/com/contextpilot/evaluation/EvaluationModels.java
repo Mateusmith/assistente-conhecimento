@@ -10,6 +10,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.Valid;
 
 public final class EvaluationModels {
 
@@ -28,6 +29,16 @@ public final class EvaluationModels {
             boolean deveRecusar,
             @Positive Long latenciaMaximaMs,
             @DecimalMin("0.0") BigDecimal custoMaximoUsd) {
+    }
+
+    public record ImportarCasosRequest(
+            @NotNull @Size(min = 1, max = 5000) List<@Valid CriarCasoRequest> casos) {
+    }
+
+    public record ImportacaoCasosResponse(int recebidos, int inseridos) {
+    }
+
+    public record AgendarExecucaoRequest(UUID execucaoBaseId) {
     }
 
     public record ConjuntoAvaliacao(
@@ -83,8 +94,11 @@ public final class EvaluationModels {
             BigDecimal custoTotalUsd,
             String modeloEmbedding,
             String provedorIa,
+            UUID execucaoBaseId,
             Instant iniciadaEm,
             Instant finalizadaEm,
+            Instant ultimoLoteEm,
+            boolean resultadosTruncados,
             List<ResultadoCaso> resultados) {
     }
 
@@ -106,5 +120,26 @@ public final class EvaluationModels {
             BigDecimal deltaCustoUsd,
             boolean regressao,
             List<String> motivos) {
+    }
+
+    public record PaginaResultados(
+            List<ResultadoCaso> itens,
+            int pagina,
+            int tamanho,
+            long totalElementos,
+            int totalPaginas) {
+    }
+
+    record ResumoResultados(
+            int total,
+            int aprovados,
+            double taxaAcerto,
+            double recallMedio,
+            double precisaoMedia,
+            double mrrMedio,
+            long latenciaP95Ms,
+            BigDecimal custoTotalUsd,
+            String modeloEmbedding,
+            String provedorIa) {
     }
 }

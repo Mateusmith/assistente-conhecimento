@@ -8,11 +8,14 @@ import java.util.concurrent.TimeUnit;
 import java.net.InetAddress;
 
 import br.com.contextpilot.document.DocumentModels.TarefaIngestao;
+import br.com.contextpilot.document.DocumentModels.OrigemTexto;
+import br.com.contextpilot.document.VisionAnalyzer.ResultadoVisao;
 import br.com.contextpilot.reindex.EmbeddingIndexService;
 import br.com.contextpilot.governance.GovernanceService;
 import br.com.contextpilot.retrieval.EmbeddingProviderRegistry;
 import br.com.contextpilot.retrieval.VectorText;
 import io.micrometer.core.instrument.MeterRegistry;
+import br.com.contextpilot.shared.domain.BusinessRuleException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -30,6 +33,7 @@ public class DocumentIngestionService {
     private final EmbeddingProviderRegistry provedores;
     private final EmbeddingIndexService indices;
     private final PromptInjectionDetector detectorPrompt;
+    private final VisionAnalyzer visao;
     private final GovernanceService governanca;
     private final DocumentIngestionTransaction transacao;
     private final MeterRegistry metricas;
@@ -45,6 +49,7 @@ public class DocumentIngestionService {
             EmbeddingProviderRegistry provedores,
             EmbeddingIndexService indices,
             PromptInjectionDetector detectorPrompt,
+            VisionAnalyzer visao,
             GovernanceService governanca,
             DocumentIngestionTransaction transacao,
             MeterRegistry metricas,
@@ -58,6 +63,7 @@ public class DocumentIngestionService {
         this.provedores = provedores;
         this.indices = indices;
         this.detectorPrompt = detectorPrompt;
+        this.visao = visao;
         this.governanca = governanca;
         this.transacao = transacao;
         this.metricas = metricas;
@@ -88,7 +94,10 @@ public class DocumentIngestionService {
                     .orElseThrow(() -> new IllegalStateException("Documento da tarefa nao foi encontrado."));
             byte[] conteudo = conteudos.obter(documento.referenciaConteudo());
             var textoExtraido = extrator.extrair(documento.tipoMime(), conteudo);
-            List<String> trechos = fragmentador.dividir(textoExtraido.texto());
+            ResultadoVisao resultadoVisao = visao.analisar(documento.tipoMime(), conteudo);
+            String textoConsolidado = consolidar(textoExtraido.texto(), resultadoVisao);
+            OrigemTexto origemTexto = resolverOrigem(textoExtraido.origem(), resultadoVisao);
+            List<String> trechos = fragmentador.dividir(textoConsolidado);
             var indice = indices.obterAtivo(documento.espacoId());
             var embeddings = provedores.obter(indice.modelo());
             var resultadosEmbedding = trechos.stream()
@@ -100,15 +109,22 @@ public class DocumentIngestionService {
             List<Boolean> riscosPrompt = trechos.stream().map(detectorPrompt::suspeito).toList();
 
             transacao.concluir(tarefa, documento.espacoId(), indice.id(), trechos, vetores, riscosPrompt,
-                    textoExtraido.origem(), textoExtraido.paginasOcr());
+                    origemTexto, textoExtraido.paginasOcr(), resultadoVisao);
             int tokens = resultadosEmbedding.stream().mapToInt(resultado -> resultado.tokensEntrada()).sum();
             java.math.BigDecimal custo = resultadosEmbedding.stream()
                     .map(resultado -> resultado.custoEstimadoUsd())
                     .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
             governanca.registrarConsumoIa(documento.espacoId(), embeddings.provedor(), embeddings.nome(),
                     "EMBEDDING", resultadosEmbedding.size(), tokens, 0, custo);
+            if (resultadoVisao.aplicada()) {
+                governanca.registrarConsumoIa(documento.espacoId(), resultadoVisao.provedor(), resultadoVisao.modelo(),
+                        "VISAO", resultadoVisao.tokensEntrada(), resultadoVisao.tokensSaida(),
+                        resultadoVisao.custoEstimadoUsd());
+                metricas.counter("contextpilot.visao.total", "provedor", resultadoVisao.provedor(),
+                        "resultado", "sucesso").increment();
+            }
             metricas.counter("contextpilot.ingestao.total", "resultado", "sucesso").increment();
-            metricas.counter("contextpilot.extracao.total", "origem", textoExtraido.origem().name().toLowerCase())
+            metricas.counter("contextpilot.extracao.total", "origem", origemTexto.name().toLowerCase())
                     .increment();
             long bloqueados = riscosPrompt.stream().filter(Boolean::booleanValue).count();
             if (bloqueados > 0) {
@@ -116,7 +132,7 @@ public class DocumentIngestionService {
                         .increment(bloqueados);
             }
             logger.info("Documento {} indexado em {} trechos pelo provedor {} com extracao {}.",
-                    documento.id(), trechos.size(), embeddings.nome(), textoExtraido.origem());
+                    documento.id(), trechos.size(), embeddings.nome(), origemTexto);
         } catch (RuntimeException excecao) {
             transacao.falhar(tarefa, excecao);
             metricas.counter("contextpilot.ingestao.total", "resultado", "falha").increment();
@@ -126,6 +142,29 @@ public class DocumentIngestionService {
             metricas.timer("contextpilot.ingestao.duracao")
                     .record(System.nanoTime() - inicio, TimeUnit.NANOSECONDS);
         }
+    }
+
+    private String consolidar(String textoOcr, ResultadoVisao resultadoVisao) {
+        String texto = textoOcr == null ? "" : textoOcr.trim();
+        if (resultadoVisao.aplicada()) {
+            texto = (texto.isBlank() ? "" : texto + "\n\n")
+                    + "DESCRICAO VISUAL GERADA:\n" + resultadoVisao.descricao();
+        }
+        if (texto.length() < 20) {
+            throw new BusinessRuleException(
+                    "A imagem nao possui texto suficiente. Ative a visao multimodal ou envie uma imagem mais legivel.");
+        }
+        return texto;
+    }
+
+    private OrigemTexto resolverOrigem(OrigemTexto origem, ResultadoVisao resultadoVisao) {
+        if (!resultadoVisao.aplicada()) {
+            if (origem == null) {
+                throw new BusinessRuleException("Nao foi possivel extrair conteudo indexavel do documento.");
+            }
+            return origem;
+        }
+        return origem == OrigemTexto.OCR ? OrigemTexto.OCR_E_VISAO : OrigemTexto.VISAO;
     }
 
     private String nomeMaquina() {

@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import br.com.contextpilot.document.DocumentModels.TarefaIngestao;
 import br.com.contextpilot.document.DocumentModels.OrigemTexto;
+import br.com.contextpilot.document.VisionAnalyzer.ResultadoVisao;
 import br.com.contextpilot.reindex.EmbeddingIndexService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,12 +38,13 @@ class DocumentIngestionTransaction {
             List<String> vetores,
             List<Boolean> riscosPrompt,
             OrigemTexto origemTexto,
-            int paginasOcr) {
+            int paginasOcr,
+            ResultadoVisao resultadoVisao) {
         Instant instante = Instant.now(relogio);
         indices.exigirIndiceAtivo(espacoId, indiceId);
         repositorio.substituirTrechos(
                 tarefa.documentoId(), espacoId, indiceId, trechos, vetores, riscosPrompt, instante);
-        repositorio.concluir(tarefa, origemTexto, paginasOcr, instante);
+        repositorio.concluir(tarefa, origemTexto, paginasOcr, resultadoVisao, instante);
     }
 
     @Transactional

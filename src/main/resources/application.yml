@@ -61,6 +61,19 @@ contextpilot:
     custo-chat-entrada-milhao: ${AI_CHAT_INPUT_COST_PER_MILLION:0}
     custo-chat-saida-milhao: ${AI_CHAT_OUTPUT_COST_PER_MILLION:0}
     custo-embedding-milhao: ${AI_EMBEDDING_COST_PER_MILLION:0}
+  ollama:
+    url-base: ${OLLAMA_BASE_URL:http://localhost:11434}
+    timeout: ${OLLAMA_TIMEOUT:120s}
+    maximo-tentativas: ${OLLAMA_MAX_ATTEMPTS:3}
+  visao:
+    ativo: ${VISION_ENABLED:false}
+    modelo: ${VISION_MODEL:gpt-5-mini}
+    detalhe: ${VISION_DETAIL:low}
+    limite-caracteres-descricao: ${VISION_DESCRIPTION_MAX_CHARS:6000}
+    maximo-largura: ${IMAGE_MAX_WIDTH:12000}
+    maximo-altura: ${IMAGE_MAX_HEIGHT:12000}
+    maximo-pixels: ${IMAGE_MAX_PIXELS:25000000}
+    permitir-provedor-externo: ${VISION_ALLOW_EXTERNAL_PROVIDER:false}
   documentos:
     tamanho-maximo-bytes: 10485760
     tamanho-trecho: 1200
@@ -103,6 +116,9 @@ contextpilot:
     tempo-lease: ${EVALUATION_LEASE_DURATION:5m}
     intervalo-worker-ms: ${EVALUATION_WORKER_INTERVAL_MS:2000}
     atraso-inicial-ms: ${EVALUATION_WORKER_INITIAL_DELAY_MS:2000}
+    tamanho-lote: ${EVALUATION_BATCH_SIZE:25}
+    tamanho-pagina-resultados: ${EVALUATION_RESULTS_PAGE_SIZE:100}
+    maximo-casos-importacao: ${EVALUATION_IMPORT_MAX_CASES:5000}
   governanca:
     redis-ativo: ${GOVERNANCE_REDIS_ENABLED:true}
     requisicoes-por-minuto: ${RATE_LIMIT_REQUESTS_PER_MINUTE:120}
@@ -117,7 +133,7 @@ contextpilot:
 
 spring.ai.mcp.server:
   name: assistente-conhecimento-mcp
-  version: 1.4.0
+  version: 1.5.0
   type: SYNC
   protocol: STATELESS
 

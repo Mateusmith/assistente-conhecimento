@@ -27,7 +27,7 @@ public class OpenApiConfig {
         return new OpenAPI()
                 .info(new Info()
                         .title("Assistente de Conhecimento API")
-                        .version("1.4.0")
+                        .version("1.5.0")
                         .description("RAG corporativo contextual com privacidade externa, rastreabilidade, avaliacoes assincronas, ACL, governanca e MCP."))
                 .components(new Components().addSecuritySchemes("oauth2", esquema))
                 .addSecurityItem(new SecurityRequirement().addList("oauth2"));

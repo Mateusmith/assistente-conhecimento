@@ -31,15 +31,16 @@ class DocumentIngestionTransactionTest {
         UUID espacoId = UUID.randomUUID();
         UUID indiceId = UUID.randomUUID();
         var tarefa = new TarefaIngestao(UUID.randomUUID(), UUID.randomUUID(), 1);
+        var semVisao = VisionAnalyzer.ResultadoVisao.naoAplicada();
 
         transacao.concluir(tarefa, espacoId, indiceId, List.of("conteudo"),
-                List.of("[0.0]"), List.of(false), OrigemTexto.NATIVO, 0);
+                List.of("[0.0]"), List.of(false), OrigemTexto.NATIVO, 0, semVisao);
 
         var ordem = inOrder(indices, repositorio);
         ordem.verify(indices).exigirIndiceAtivo(espacoId, indiceId);
         ordem.verify(repositorio).substituirTrechos(
                 eq(tarefa.documentoId()), eq(espacoId), eq(indiceId), any(), any(), any(), any());
-        ordem.verify(repositorio).concluir(eq(tarefa), eq(OrigemTexto.NATIVO), eq(0), any());
+        ordem.verify(repositorio).concluir(eq(tarefa), eq(OrigemTexto.NATIVO), eq(0), eq(semVisao), any());
     }
 
     @Test
@@ -50,12 +51,13 @@ class DocumentIngestionTransactionTest {
         UUID espacoId = UUID.randomUUID();
         UUID indiceId = UUID.randomUUID();
         var tarefa = new TarefaIngestao(UUID.randomUUID(), UUID.randomUUID(), 1);
+        var semVisao = VisionAnalyzer.ResultadoVisao.naoAplicada();
         doThrow(new ConflictException("Indice alterado."))
                 .when(indices).exigirIndiceAtivo(espacoId, indiceId);
 
         assertThatThrownBy(() -> transacao.concluir(
                 tarefa, espacoId, indiceId, List.of("conteudo"), List.of("[0.0]"),
-                List.of(false), OrigemTexto.NATIVO, 0))
+                List.of(false), OrigemTexto.NATIVO, 0, semVisao))
                 .isInstanceOf(ConflictException.class);
 
         verify(repositorio, never()).substituirTrechos(any(), any(), any(), any(), any(), any(), any());

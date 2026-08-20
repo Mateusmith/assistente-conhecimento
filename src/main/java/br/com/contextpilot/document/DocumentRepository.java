@@ -17,6 +17,7 @@ import br.com.contextpilot.document.DocumentModels.OrigemTexto;
 import br.com.contextpilot.document.DocumentModels.ReferenciaConteudo;
 import br.com.contextpilot.document.DocumentModels.ResultadoAntivirus;
 import br.com.contextpilot.document.DocumentModels.TarefaIngestao;
+import br.com.contextpilot.document.VisionAnalyzer.ResultadoVisao;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import tools.jackson.core.JacksonException;
@@ -31,6 +32,8 @@ class DocumentRepository {
                    d.estado, d.versao, d.tamanho_bytes, d.criado_por, d.criado_em,
                    d.processado_em, d.erro_processamento, d.armazenamento,
                    d.resultado_antivirus, d.verificado_antivirus_em, d.origem_texto, d.paginas_ocr,
+                   d.visao_aplicada, d.provedor_visao, d.modelo_visao,
+                   d.tokens_visao_entrada, d.tokens_visao_saida, d.custo_visao_usd,
                    d.metadados::text AS metadados
               FROM documentos d
             """;
@@ -278,7 +281,12 @@ class DocumentRepository {
                 .update();
     }
 
-    void concluir(TarefaIngestao tarefa, OrigemTexto origemTexto, int paginasOcr, Instant instante) {
+    void concluir(
+            TarefaIngestao tarefa,
+            OrigemTexto origemTexto,
+            int paginasOcr,
+            ResultadoVisao resultadoVisao,
+            Instant instante) {
         banco.sql("""
                         UPDATE tarefas_ingestao
                            SET estado = 'CONCLUIDA', finalizada_em = :instante,
@@ -291,12 +299,21 @@ class DocumentRepository {
         banco.sql("""
                         UPDATE documentos
                            SET estado = 'PRONTO', processado_em = :instante, erro_processamento = NULL,
-                               origem_texto = :origemTexto, paginas_ocr = :paginasOcr
+                                origem_texto = :origemTexto, paginas_ocr = :paginasOcr,
+                                visao_aplicada = :visaoAplicada, provedor_visao = :provedorVisao,
+                                modelo_visao = :modeloVisao, tokens_visao_entrada = :tokensVisaoEntrada,
+                                tokens_visao_saida = :tokensVisaoSaida, custo_visao_usd = :custoVisaoUsd
                          WHERE id = :documentoId
                         """)
                 .param("documentoId", tarefa.documentoId())
                 .param("origemTexto", origemTexto.name())
                 .param("paginasOcr", paginasOcr)
+                .param("visaoAplicada", resultadoVisao.aplicada())
+                .param("provedorVisao", resultadoVisao.provedor(), java.sql.Types.VARCHAR)
+                .param("modeloVisao", resultadoVisao.modelo(), java.sql.Types.VARCHAR)
+                .param("tokensVisaoEntrada", resultadoVisao.tokensEntrada())
+                .param("tokensVisaoSaida", resultadoVisao.tokensSaida())
+                .param("custoVisaoUsd", resultadoVisao.custoEstimadoUsd())
                 .param("instante", instante(instante))
                 .update();
     }
@@ -376,6 +393,12 @@ class DocumentRepository {
                         ? null : rs.getTimestamp("verificado_antivirus_em").toInstant(),
                 rs.getString("origem_texto") == null ? null : OrigemTexto.valueOf(rs.getString("origem_texto")),
                 rs.getInt("paginas_ocr"),
+                rs.getBoolean("visao_aplicada"),
+                rs.getString("provedor_visao"),
+                rs.getString("modelo_visao"),
+                rs.getInt("tokens_visao_entrada"),
+                rs.getInt("tokens_visao_saida"),
+                rs.getBigDecimal("custo_visao_usd"),
                 lerMetadados(rs.getString("metadados")),
                 VisibilidadeDocumento.valueOf(rs.getString("visibilidade")),
                 EstadoDocumento.valueOf(rs.getString("estado")),

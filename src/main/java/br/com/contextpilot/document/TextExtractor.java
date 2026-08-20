@@ -1,6 +1,7 @@
 package br.com.contextpilot.document;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -28,8 +29,26 @@ class TextExtractor {
             case "application/pdf" -> extrairPdf(conteudo);
             case "text/plain", "text/markdown" ->
                     new TextoExtraido(exigirTextoSuficiente(extrairUtf8(conteudo)), OrigemTexto.NATIVO, 0);
+            case "image/png", "image/jpeg" -> extrairImagem(conteudo);
             default -> throw new BusinessRuleException("Tipo de documento nao suportado para extracao.");
         };
+    }
+
+    private TextoExtraido extrairImagem(byte[] conteudo) {
+        if (!ocr.ativo()) {
+            return new TextoExtraido("", null, 0);
+        }
+        try {
+            var imagem = javax.imageio.ImageIO.read(new ByteArrayInputStream(conteudo));
+            if (imagem == null) {
+                throw new BusinessRuleException("A imagem esta corrompida ou nao pode ser lida.");
+            }
+            var resultado = ocr.extrair(imagem);
+            return new TextoExtraido(normalizar(resultado.texto()), OrigemTexto.OCR,
+                    resultado.paginasProcessadas());
+        } catch (IOException excecao) {
+            throw new BusinessRuleException("A imagem esta corrompida ou nao pode ser lida.");
+        }
     }
 
     private TextoExtraido extrairPdf(byte[] conteudo) {

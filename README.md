@@ -20,14 +20,15 @@ regras de negocio:
 - tenant e ACL entram no SQL antes da ordenacao e do `LIMIT`;
 - cada afirmacao precisa citar uma fonte valida como `[F1]`;
 - trechos suspeitos de prompt injection nao entram no contexto;
-- documentos passam por ClamAV, MinIO/S3, SHA-256 e OCR real;
+- PDF, texto, Markdown, PNG e JPEG passam por ClamAV, MinIO/S3, SHA-256 e OCR real;
+- imagens podem receber descricao multimodal opcional, sempre citavel e sujeita a ACL;
 - indices de embedding sao construidos blue-green e permitem rollback;
 - busca aceita metadados e compara estrategias hibrida, semantica e textual;
 - recuperacao contextual usa diversidade e trechos vizinhos sem relaxar ACL;
 - conversas preservam contexto sem compartilhar memoria entre usuarios;
 - streaming envia somente fontes e resposta ja validadas, nunca tokens crus;
 - dados sensiveis sao tokenizados antes de chamar um provedor de IA externo;
-- avaliacao assincrona mede recall, precisao, MRR, p95 e custo contra uma baseline;
+- avaliacao assincrona em lotes mede recall, precisao, MRR, p95 e custo contra uma baseline;
 - cada resposta registra versao e SHA-256 do prompt, indice e fontes de contexto;
 - Redis aplica limites e quotas compartilhados entre replicas;
 - tokens, custos, SLOs, alertas e tempo de ingestao sao observaveis;
@@ -48,7 +49,7 @@ flowchart LR
     A2 --> R
     A1 --> M["MinIO / S3"]
     A1 --> C["ClamAV + Tesseract"]
-    A1 --> I["OpenAI opcional"]
+    A1 --> I["OpenAI ou Ollama opcionais"]
     A1 --> O["Prometheus / Alertmanager / Grafana / Zipkin"]
 ```
 
@@ -61,7 +62,7 @@ O projeto e um monolito modular. JDBC explicito torna visiveis as transacoes, le
 - Java 21, virtual threads, Spring Boot 4.1, Spring Security 7 e Spring AI MCP 2.0
 - PostgreSQL 17, pgvector, Flyway e Spring JDBC
 - Redis com script Lua atomico para limites distribuidos
-- MinIO/S3, AWS SDK, ClamAV, PDFBox e Tesseract `por+eng`
+- MinIO/S3, AWS SDK, ClamAV, PDFBox, Tesseract `por+eng` e Ollama opcional
 - OAuth2/OIDC, JWT com audiencia, Keycloak, Swagger PKCE e SSE
 - Prometheus, Alertmanager, Grafana, OpenTelemetry e Zipkin
 - JUnit 5, MockMvc, Testcontainers, JaCoCo, Postman e Newman
@@ -74,7 +75,7 @@ O projeto e um monolito modular. JDBC explicito torna visiveis as transacoes, le
 - Docker Desktop com Compose
 - PowerShell 7 para a carga automatizada
 - portas livres: `8083`, `54326`, `16383`, `18084`, `19000`, `19001`,
-  `13310`, `19411`, `19093`, `19094` e `13003`
+  `13310`, `19411`, `19093`, `19094` e `13003`; `11434` apenas no perfil Ollama
 
 ### Subir tudo
 
@@ -117,7 +118,7 @@ Essas credenciais sao apenas locais.
 ./scripts/smoke-test.ps1
 ```
 
-O script executa 23 etapas e prova ClamAV, S3, integridade, OCR, ACL, citacoes,
+O script executa 24 etapas e prova ClamAV, S3, integridade, OCR de PDF/PNG, ACL, citacoes,
 RAG contextual, rastreabilidade, conversa idempotente, streaming validado, avaliacao
 assincrona, MCP, comparacao de busca, governanca, reindexacao blue-green, rollback e
 exportacao LGPD.
@@ -189,6 +190,12 @@ curl -X POST "http://localhost:8083/api/v1/espacos/<espacoId>/documentos" \
 ```
 
 Metadados aceitam ate 20 chaves e valores escalares ou listas curtas de texto.
+
+PNG e JPEG usam o mesmo endpoint. A API confere assinatura, formato real, dimensoes e
+quantidade de pixels antes de armazenar. Com `VISION_ENABLED=true`, a descricao do
+modelo e anexada ao texto reconhecido pelo OCR e vira trecho normal: passa por deteccao
+de prompt injection, embedding, tenant, ACL e validacao de citacao. Para OpenAI tambem
+e necessario consentimento explicito com `VISION_ALLOW_EXTERNAL_PROVIDER=true`.
 
 ### Permissao e pergunta filtrada
 
@@ -310,11 +317,22 @@ Para progresso por SSE, envie o mesmo corpo para
 }
 ```
 
-Agende com `POST .../execucoes`. A API responde `202 Accepted` e estado `PENDENTE`.
+Agende com `POST .../execucoes` enviando `{}` ou, para comparar automaticamente,
+`{"execucaoBaseId":"<uuid>"}`. A API responde `202 Accepted` e estado `PENDENTE`.
 Consulte `GET .../execucoes/{execucaoId}` ate `CONCLUIDA`, `FALHOU` ou `CANCELADA`;
 `DELETE` no mesmo recurso solicita cancelamento. O progresso informa casos processados
 e total. Ao concluir, a execucao registra cobertura de termos, recall, precisao, MRR,
-p95, custo, modelo e provedor. Compare uma mudanca com a baseline em:
+p95, custo, modelo e provedor. Cada worker processa somente um lote, grava progresso e
+libera a execucao para a proxima rodada. Uma nova execucao pode registrar sua baseline:
+
+```json
+{"execucaoBaseId":"<execucao-base-id>"}
+```
+
+Importe datasets em `POST .../{conjuntoId}/casos/importacoes`, consulte o historico em
+`GET .../{conjuntoId}/execucoes` e percorra resultados sem carregar tudo em memoria com
+`GET .../{conjuntoId}/execucoes/{execucaoId}/resultados?pagina=0&tamanho=100`.
+Compare uma mudanca com a baseline em:
 
 ```http
 GET /api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{atualId}/comparacoes/{baseId}
@@ -413,6 +431,25 @@ provedor continuam contabilizados. Com a protecao externa ativa, valores reconhe
 por padrao viram marcadores durante a chamada e sao restaurados somente na API. Esse
 controle reduz exposicao, mas nao substitui um DLP/NER corporativo.
 
+### Ollama local
+
+O overlay baixa um modelo multimodal e um modelo de embeddings e mantem o trafego na
+maquina local:
+
+```powershell
+docker compose -f compose.yml -f compose.ollama.yml up -d --build
+docker compose -f compose.yml -f compose.ollama.yml ps
+.\scripts\ollama-smoke-test.ps1
+.\scripts\ollama-api-smoke-test.ps1
+```
+
+Por padrao ele usa `gemma3:4b` para chat/visao e `all-minilm` com 384 dimensoes para
+embeddings. Os nomes sao parametrizaveis, mas mudar o modelo de embedding exige criar
+um novo indice blue-green. A primeira inicializacao demora enquanto os modelos sao
+baixados. O modo Ollama registra tokens e latencia, com custo monetario estimado zero.
+O primeiro teste opcional comprova os contratos diretos de embedding, chat e visao.
+O segundo percorre a aplicacao completa com ClamAV, S3, OCR, visao, RAG e citacao.
+
 ## Escala horizontal
 
 O gateway evita conflito de portas e os workers usam leases retomaveis:
@@ -454,7 +491,8 @@ Controles adicionais:
 ## Observabilidade
 
 O dashboard provisionado cobre disponibilidade, p95, fila, leases, ingestao, OCR,
-antivirus, armazenamento, reindexacao, conversas, avaliacoes, quotas, tokens e custo. Prometheus carrega
+visao, antivirus, armazenamento, reindexacao, conversas, avaliacoes em lote, quotas,
+tokens e custo. Prometheus carrega
 [regras de SLO e alerta](docker/prometheus/rules.yml), e cada alerta aponta para
 [runbooks](docs/runbooks).
 
@@ -467,7 +505,7 @@ antivirus, armazenamento, reindexacao, conversas, avaliacoes, quotas, tokens e c
 A suite usa PostgreSQL/pgvector e MinIO reais via Testcontainers e cobre:
 
 - migracoes Flyway e retrocompatibilidade de `BYTEA` legado;
-- S3, hash, ClamAV, OCR, fragmentacao e embeddings;
+- S3, hash, ClamAV, OCR de PDF/imagem, limites de pixels, visao e embeddings;
 - API, metricas, OAuth2, tenant e ACL de documento;
 - metadados, tres estrategias e filtro cross-tenant;
 - MMR, diversidade, vizinhos contextuais e reaplicacao de ACL;
@@ -475,7 +513,8 @@ A suite usa PostgreSQL/pgvector e MinIO reais via Testcontainers e cobre:
 - prompt injection, citacao falsa, cross-tenant e documento sem permissao;
 - memoria conversacional isolada, lease, idempotencia, SSE validado e audiencia JWT;
 - tokenizacao e restauracao de dados sensiveis no provedor externo;
-- jobs retomaveis, cancelamento, recall, precisao, MRR, orcamento e baseline RAG;
+- jobs em lotes retomaveis, importacao, paginacao, cancelamento e baseline RAG;
+- contrato equivalente de geracao/embedding entre local, OpenAI e Ollama;
 - quotas, uso, exportacao e exclusao LGPD.
 
 O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCoCo em
@@ -497,6 +536,9 @@ O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCo
 - [ADR 008: avaliacao RAG quantitativa](docs/adr/008-rag-evaluation-regression.md)
 - [ADR 009: RAG contextual e privado](docs/adr/009-private-contextual-rag.md)
 - [ADR 010: avaliacoes retomaveis](docs/adr/010-resumable-evaluation-jobs.md)
+- [ADR 011: ingestao multimodal segura](docs/adr/011-secure-multimodal-ingestion.md)
+- [ADR 012: avaliacoes grandes em lotes](docs/adr/012-batched-evaluation-jobs.md)
+- [ADR 013: Ollama e contratos de provedores](docs/adr/013-ollama-provider-contracts.md)
 - [Politica de seguranca](SECURITY.md)
 - [Como contribuir](CONTRIBUTING.md)
 - [Historico](CHANGELOG.md)

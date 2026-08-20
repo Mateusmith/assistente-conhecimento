@@ -35,9 +35,11 @@ public class EmbeddingProviderRegistry {
     }
 
     public EmbeddingProvider padrao() {
-        String modelo = "openai".equalsIgnoreCase(propriedades.provedor())
-                ? "openai:" + propriedades.modeloEmbedding()
-                : "local-hashing-v1";
+        String modelo = switch (propriedades.provedor().toLowerCase(java.util.Locale.ROOT)) {
+            case "openai" -> "openai:" + propriedades.modeloEmbedding();
+            case "ollama" -> "ollama:" + propriedades.modeloEmbedding();
+            default -> "local-hashing-v1";
+        };
         return obter(modelo);
     }
 

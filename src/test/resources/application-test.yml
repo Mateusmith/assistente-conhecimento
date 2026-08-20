@@ -27,6 +27,9 @@ contextpilot:
     tempo-lease: 30s
     intervalo-worker-ms: 50
     atraso-inicial-ms: 50
+    tamanho-lote: 1
+    tamanho-pagina-resultados: 1
+    maximo-casos-importacao: 10
 
 management:
   health:

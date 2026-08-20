@@ -61,3 +61,11 @@ groups:
         annotations:
           resumo: "Uma metrica da ultima avaliacao RAG ficou abaixo de 80%"
           runbook: "docs/runbooks/rag-quality.md"
+      - alert: AvaliacaoRagAbandonada
+        expr: max(contextpilot_avaliacao_leases_expirados) > 0
+        for: 5m
+        labels:
+          severidade: media
+        annotations:
+          resumo: "Existe uma avaliacao RAG com lease expirado aguardando retomada"
+          runbook: "docs/runbooks/evaluation-backlog.md"

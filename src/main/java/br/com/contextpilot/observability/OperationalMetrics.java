@@ -35,6 +35,15 @@ class OperationalMetrics {
         Gauge.builder("contextpilot.reindexacao.progresso.medio", this, valor -> valor.progressoReindexacao())
                 .description("Progresso medio das reindexacoes em andamento, de zero a um")
                 .register(metricas);
+        Gauge.builder("contextpilot.avaliacao.fila.pendentes", this, valor -> valor.contarAvaliacoesPendentes())
+                .description("Quantidade de avaliacoes aguardando um worker")
+                .register(metricas);
+        Gauge.builder("contextpilot.avaliacao.em.andamento", this, valor -> valor.contarAvaliacoesEmAndamento())
+                .description("Quantidade de avaliacoes em processamento por lotes")
+                .register(metricas);
+        Gauge.builder("contextpilot.avaliacao.leases.expirados", this, valor -> valor.contarLeasesAvaliacaoExpirados())
+                .description("Quantidade de avaliacoes abandonadas prontas para retomada")
+                .register(metricas);
     }
 
     private double contarTarefasPendentes() {
@@ -64,6 +73,21 @@ class OperationalMetrics {
                 SELECT COALESCE(AVG(CASE WHEN total_trechos = 0 THEN 1.0
                                          ELSE trechos_processados::numeric / total_trechos END), 1.0)
                   FROM indices_embedding WHERE estado = 'CONSTRUINDO'
+                """);
+    }
+
+    private double contarAvaliacoesPendentes() {
+        return consultarNumero("SELECT COUNT(*) FROM execucoes_avaliacao WHERE estado = 'PENDENTE'");
+    }
+
+    private double contarAvaliacoesEmAndamento() {
+        return consultarNumero("SELECT COUNT(*) FROM execucoes_avaliacao WHERE estado = 'EXECUTANDO'");
+    }
+
+    private double contarLeasesAvaliacaoExpirados() {
+        return consultarNumero("""
+                SELECT COUNT(*) FROM execucoes_avaliacao
+                 WHERE estado = 'EXECUTANDO' AND bloqueado_ate < CURRENT_TIMESTAMP
                 """);
     }
 

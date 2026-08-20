@@ -68,3 +68,25 @@ function New-OcrFixture([string]$Caminho) {
         Remove-Item -LiteralPath $caminhoImagem -Force -ErrorAction SilentlyContinue
     }
 }
+
+function New-ImageFixture([string]$Caminho) {
+    Add-Type -AssemblyName System.Drawing
+
+    $imagem = [System.Drawing.Bitmap]::new(1400, 700)
+    $grafico = [System.Drawing.Graphics]::FromImage($imagem)
+    $fonteTitulo = [System.Drawing.Font]::new("Arial", 42, [System.Drawing.FontStyle]::Bold)
+    $fonteTexto = [System.Drawing.Font]::new("Arial", 34, [System.Drawing.FontStyle]::Regular)
+    try {
+        $grafico.Clear([System.Drawing.Color]::White)
+        $grafico.DrawString("Comprovante visual do pedido", $fonteTitulo,
+            [System.Drawing.Brushes]::Black, 70, 150)
+        $grafico.DrawString("Pedido 8742 aprovado para processamento.", $fonteTexto,
+            [System.Drawing.Brushes]::Black, 70, 270)
+        $imagem.Save($Caminho, [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally {
+        $fonteTexto.Dispose()
+        $fonteTitulo.Dispose()
+        $grafico.Dispose()
+        $imagem.Dispose()
+    }
+}

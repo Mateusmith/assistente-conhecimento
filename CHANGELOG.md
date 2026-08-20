@@ -4,6 +4,27 @@ Todas as mudancas relevantes deste projeto sao registradas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
+## [1.5.0] - 2026-08-20
+
+### Adicionado
+
+- Upload de PNG/JPEG com verificacao de assinatura, limite de pixels, ClamAV, S3 e OCR de imagem.
+- Visao multimodal opcional com OpenAI ou Ollama, descricao citavel e telemetria de tokens/custo.
+- Provedor Ollama para chat e embeddings, overlay Docker e testes de contrato entre provedores.
+- Smoke tests reproduziveis para contratos Ollama e para o pipeline completo da API.
+- Importacao de ate 5.000 casos de avaliacao, historico de execucoes e resultados paginados.
+- Execucao-base vinculada ao job e metricas/alerta para leases de avaliacao abandonados.
+
+### Alterado
+
+- Avaliacoes grandes agora sao processadas em lotes configuraveis e liberam o worker entre lotes.
+- O endpoint resumido limita resultados embutidos; a colecao completa fica no recurso paginado.
+- A descricao visual e tratada como dado nao confiavel e passa pelas mesmas regras de ACL, prompt injection e citacao.
+
+### Corrigido
+
+- A coluna de origem do texto agora comporta `OCR_E_VISAO` em bancos novos e existentes.
+
 ## [1.4.0] - 2026-08-20
 
 ### Adicionado
@@ -99,3 +120,4 @@ e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 [1.2.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.2.0
 [1.3.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.3.0
 [1.4.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.4.0
+[1.5.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.5.0

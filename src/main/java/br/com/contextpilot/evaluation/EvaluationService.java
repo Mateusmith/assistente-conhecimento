@@ -24,6 +24,11 @@ import br.com.contextpilot.evaluation.EvaluationModels.CriarConjuntoRequest;
 import br.com.contextpilot.evaluation.EvaluationModels.ExecucaoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.ResultadoCaso;
 import br.com.contextpilot.evaluation.EvaluationModels.TrabalhoAvaliacao;
+import br.com.contextpilot.evaluation.EvaluationModels.AgendarExecucaoRequest;
+import br.com.contextpilot.evaluation.EvaluationModels.ImportacaoCasosResponse;
+import br.com.contextpilot.evaluation.EvaluationModels.ImportarCasosRequest;
+import br.com.contextpilot.evaluation.EvaluationModels.PaginaResultados;
+import br.com.contextpilot.evaluation.EvaluationModels.ResumoResultados;
 import br.com.contextpilot.shared.domain.BusinessRuleException;
 import br.com.contextpilot.shared.domain.ResourceNotFoundException;
 import br.com.contextpilot.workspace.WorkspaceAccessService;
@@ -43,6 +48,9 @@ public class EvaluationService {
     private final MeterRegistry metricas;
     private final Clock relogio;
     private final Duration tempoLease;
+    private final int tamanhoLote;
+    private final int tamanhoPaginaResultados;
+    private final int maximoCasosImportacao;
 
     public EvaluationService(
             EvaluationRepository repositorio,
@@ -52,7 +60,10 @@ public class EvaluationService {
             EvaluationMetrics metricasAvaliacao,
             MeterRegistry metricas,
             Clock relogio,
-            @Value("${contextpilot.avaliacoes.tempo-lease:5m}") Duration tempoLease) {
+            @Value("${contextpilot.avaliacoes.tempo-lease:5m}") Duration tempoLease,
+            @Value("${contextpilot.avaliacoes.tamanho-lote:25}") int tamanhoLote,
+            @Value("${contextpilot.avaliacoes.tamanho-pagina-resultados:100}") int tamanhoPaginaResultados,
+            @Value("${contextpilot.avaliacoes.maximo-casos-importacao:5000}") int maximoCasosImportacao) {
         this.repositorio = repositorio;
         this.acessoEspaco = acessoEspaco;
         this.respostas = respostas;
@@ -61,6 +72,11 @@ public class EvaluationService {
         this.metricas = metricas;
         this.relogio = relogio;
         this.tempoLease = tempoLease;
+        this.tamanhoLote = exigirIntervalo(tamanhoLote, 1, 500, "tamanho do lote");
+        this.tamanhoPaginaResultados = exigirIntervalo(
+                tamanhoPaginaResultados, 1, 500, "tamanho da pagina de resultados");
+        this.maximoCasosImportacao = exigirIntervalo(
+                maximoCasosImportacao, 1, 5000, "limite de importacao");
     }
 
     @Transactional
@@ -87,16 +103,41 @@ public class EvaluationService {
             String usuarioId) {
         acessoEspaco.exigirCuradoria(espacoId, usuarioId);
         exigirConjunto(espacoId, conjuntoId);
-        if (!requisicao.deveRecusar() && requisicao.termosEsperados().isEmpty()
-                && requisicao.documentosEsperados().isEmpty()) {
-            throw new BusinessRuleException("Informe termos ou documentos esperados para um caso que deve responder.");
-        }
+        validarCaso(requisicao);
         UUID id = UUID.randomUUID();
         List<String> termos = requisicao.termosEsperados().stream().map(String::trim).distinct().toList();
         repositorio.criarCaso(id, conjuntoId, requisicao.pergunta().trim(), termos,
                 requisicao.documentosEsperados().stream().distinct().toList(), requisicao.deveRecusar(),
                 requisicao.latenciaMaximaMs(), requisicao.custoMaximoUsd(), Instant.now(relogio));
         return repositorio.listarCasos(conjuntoId).stream().filter(c -> c.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    @Transactional
+    public ImportacaoCasosResponse importarCasos(
+            UUID espacoId,
+            UUID conjuntoId,
+            ImportarCasosRequest requisicao,
+            String usuarioId) {
+        acessoEspaco.exigirCuradoria(espacoId, usuarioId);
+        exigirConjunto(espacoId, conjuntoId);
+        if (requisicao == null || requisicao.casos() == null || requisicao.casos().isEmpty()) {
+            throw new BusinessRuleException("Informe pelo menos um caso para importacao.");
+        }
+        if (requisicao.casos().size() > maximoCasosImportacao) {
+            throw new BusinessRuleException("A importacao excede o limite de " + maximoCasosImportacao + " casos.");
+        }
+        Instant instante = Instant.now(relogio);
+        int indice = 0;
+        for (CriarCasoRequest caso : requisicao.casos()) {
+            validarCaso(caso);
+            repositorio.criarCaso(UUID.randomUUID(), conjuntoId, caso.pergunta().trim(),
+                    caso.termosEsperados().stream().map(String::trim).distinct().toList(),
+                    caso.documentosEsperados().stream().distinct().toList(), caso.deveRecusar(),
+                    caso.latenciaMaximaMs(), caso.custoMaximoUsd(), instante.plusNanos(indice++));
+        }
+        auditoria.registrar(espacoId, usuarioId, "CASOS_AVALIACAO_IMPORTADOS", "CONJUNTO_AVALIACAO",
+                conjuntoId.toString(), Map.of("quantidade", requisicao.casos().size()));
+        return new ImportacaoCasosResponse(requisicao.casos().size(), requisicao.casos().size());
     }
 
     public List<CasoAvaliacao> listarCasos(UUID espacoId, UUID conjuntoId, String usuarioId) {
@@ -106,20 +147,37 @@ public class EvaluationService {
     }
 
     @Transactional
-    public ExecucaoAvaliacao executar(UUID espacoId, UUID conjuntoId, String usuarioId) {
+    public ExecucaoAvaliacao executar(
+            UUID espacoId,
+            UUID conjuntoId,
+            AgendarExecucaoRequest requisicao,
+            String usuarioId) {
         acessoEspaco.exigirCuradoria(espacoId, usuarioId);
         exigirConjunto(espacoId, conjuntoId);
-        List<CasoAvaliacao> casos = repositorio.listarCasos(conjuntoId);
-        if (casos.isEmpty()) {
+        int totalCasos = repositorio.contarCasos(conjuntoId);
+        if (totalCasos == 0) {
             throw new BusinessRuleException("Adicione pelo menos um caso antes de executar a avaliacao.");
+        }
+        UUID execucaoBaseId = requisicao == null ? null : requisicao.execucaoBaseId();
+        if (execucaoBaseId != null) {
+            ExecucaoAvaliacao base = repositorio.buscarExecucao(execucaoBaseId, conjuntoId, 0)
+                    .orElseThrow(() -> new ResourceNotFoundException("Execucao base nao encontrada."));
+            if (!"CONCLUIDA".equals(base.estado())) {
+                throw new BusinessRuleException("A execucao base precisa estar concluida.");
+            }
         }
 
         UUID execucaoId = UUID.randomUUID();
-        repositorio.agendarExecucao(execucaoId, conjuntoId, usuarioId, casos.size(), Instant.now(relogio));
+        repositorio.agendarExecucao(
+                execucaoId, conjuntoId, usuarioId, totalCasos, execucaoBaseId, Instant.now(relogio));
         metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "agendada").increment();
         auditoria.registrar(espacoId, usuarioId, "AVALIACAO_AGENDADA", "EXECUCAO_AVALIACAO",
-                execucaoId.toString(), Map.of("casos", casos.size()));
+                execucaoId.toString(), Map.of("casos", totalCasos));
         return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
+    }
+
+    public ExecucaoAvaliacao executar(UUID espacoId, UUID conjuntoId, String usuarioId) {
+        return executar(espacoId, conjuntoId, null, usuarioId);
     }
 
     void processar(TrabalhoAvaliacao trabalho, String trabalhadorId) {
@@ -127,7 +185,7 @@ public class EvaluationService {
         try {
             acessoEspaco.exigirCuradoria(trabalho.espacoId(), trabalho.usuarioId());
             List<CasoAvaliacao> casosPendentes = repositorio.listarCasosPendentes(
-                    trabalho.conjuntoId(), execucaoId);
+                    trabalho.conjuntoId(), execucaoId, tamanhoLote);
             for (CasoAvaliacao caso : casosPendentes) {
                 if (repositorio.cancelamentoSolicitado(execucaoId)) {
                     repositorio.cancelarExecucao(execucaoId, trabalhadorId, Instant.now(relogio));
@@ -149,28 +207,12 @@ public class EvaluationService {
                 metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "cancelada").increment();
                 return;
             }
-            List<ResultadoCaso> resultados = repositorio.listarResultados(execucaoId);
-            int aprovados = (int) resultados.stream().filter(ResultadoCaso::aprovado).count();
-            RespostaRag ultimaResposta = resultados.isEmpty() ? null
-                    : respostas.buscar(trabalho.espacoId(), resultados.getLast().consultaId(), trabalho.usuarioId());
-            String modeloEmbedding = ultimaResposta == null ? null : ultimaResposta.modeloEmbedding();
-            String provedorIa = ultimaResposta == null ? null : ultimaResposta.provedorIa();
-            int totalCasos = resultados.size();
-            double taxa = totalCasos == 0 ? 0.0 : (double) aprovados / totalCasos;
-            double recallMedio = media(resultados.stream().mapToDouble(ResultadoCaso::pontuacaoFontes).toArray());
-            double precisaoMedia = media(resultados.stream().mapToDouble(ResultadoCaso::precisaoFontes).toArray());
-            double mrrMedio = media(resultados.stream().mapToDouble(ResultadoCaso::mrr).toArray());
-            long latenciaP95 = percentil95(resultados.stream().mapToLong(ResultadoCaso::latenciaMs).toArray());
-            BigDecimal custoTotal = resultados.stream().map(ResultadoCaso::custoUsd)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            repositorio.concluirExecucao(execucaoId, aprovados, taxa, recallMedio, precisaoMedia,
-                    mrrMedio, latenciaP95, custoTotal, modeloEmbedding, provedorIa,
-                    Instant.now(relogio), trabalhadorId);
-            metricasAvaliacao.registrar(taxa, recallMedio, precisaoMedia, mrrMedio, latenciaP95, custoTotal);
-            metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "concluida").increment();
-            auditoria.registrar(trabalho.espacoId(), trabalho.usuarioId(), "AVALIACAO_EXECUTADA",
-                    "EXECUCAO_AVALIACAO", execucaoId.toString(), Map.of("casos", totalCasos, "aprovados", aprovados,
-                            "taxa", taxa, "recall", recallMedio, "precisao", precisaoMedia, "mrr", mrrMedio));
+            if (repositorio.possuiCasosPendentes(trabalho.conjuntoId(), execucaoId)) {
+                repositorio.liberarLote(execucaoId, trabalhadorId, Instant.now(relogio));
+                metricas.counter("contextpilot.avaliacao.lotes", "resultado", "processado").increment();
+                return;
+            }
+            concluir(trabalho, trabalhadorId);
         } catch (RuntimeException excecao) {
             String erro = "Falha durante a avaliacao: " + excecao.getClass().getSimpleName();
             repositorio.falharExecucao(execucaoId, erro, Instant.now(relogio), trabalhadorId);
@@ -178,6 +220,22 @@ public class EvaluationService {
             auditoria.registrar(trabalho.espacoId(), trabalho.usuarioId(), "AVALIACAO_FALHOU", "EXECUCAO_AVALIACAO",
                     execucaoId.toString(), Map.of("erro", excecao.getClass().getSimpleName()));
         }
+    }
+
+    private void concluir(TrabalhoAvaliacao trabalho, String trabalhadorId) {
+        ResumoResultados resumo = repositorio.resumirResultados(trabalho.execucaoId());
+        repositorio.concluirExecucao(trabalho.execucaoId(), resumo.aprovados(), resumo.taxaAcerto(),
+                resumo.recallMedio(), resumo.precisaoMedia(), resumo.mrrMedio(), resumo.latenciaP95Ms(),
+                resumo.custoTotalUsd(), resumo.modeloEmbedding(), resumo.provedorIa(),
+                Instant.now(relogio), trabalhadorId);
+        metricasAvaliacao.registrar(resumo.taxaAcerto(), resumo.recallMedio(), resumo.precisaoMedia(),
+                resumo.mrrMedio(), resumo.latenciaP95Ms(), resumo.custoTotalUsd());
+        metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "concluida").increment();
+        auditoria.registrar(trabalho.espacoId(), trabalho.usuarioId(), "AVALIACAO_EXECUTADA",
+                "EXECUCAO_AVALIACAO", trabalho.execucaoId().toString(),
+                Map.of("casos", resumo.total(), "aprovados", resumo.aprovados(),
+                        "taxa", resumo.taxaAcerto(), "recall", resumo.recallMedio(),
+                        "precisao", resumo.precisaoMedia(), "mrr", resumo.mrrMedio()));
     }
 
     @Transactional
@@ -204,8 +262,37 @@ public class EvaluationService {
             String usuarioId) {
         acessoEspaco.exigirMembro(espacoId, usuarioId);
         exigirConjunto(espacoId, conjuntoId);
-        return repositorio.buscarExecucao(execucaoId, conjuntoId)
+        return repositorio.buscarExecucao(execucaoId, conjuntoId, tamanhoPaginaResultados)
                 .orElseThrow(() -> new ResourceNotFoundException("Execucao de avaliacao nao encontrada."));
+    }
+
+    public List<ExecucaoAvaliacao> listarExecucoes(
+            UUID espacoId,
+            UUID conjuntoId,
+            int limite,
+            String usuarioId) {
+        acessoEspaco.exigirMembro(espacoId, usuarioId);
+        exigirConjunto(espacoId, conjuntoId);
+        return repositorio.listarExecucoes(conjuntoId, exigirIntervalo(limite, 1, 200, "limite do historico"));
+    }
+
+    public PaginaResultados listarResultados(
+            UUID espacoId,
+            UUID conjuntoId,
+            UUID execucaoId,
+            int pagina,
+            int tamanho,
+            String usuarioId) {
+        buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
+        if (pagina < 0) {
+            throw new BusinessRuleException("A pagina nao pode ser negativa.");
+        }
+        int tamanhoValidado = exigirIntervalo(tamanho, 1, 500, "tamanho da pagina");
+        long total = repositorio.contarResultados(execucaoId);
+        int totalPaginas = total == 0 ? 0 : (int) Math.ceil((double) total / tamanhoValidado);
+        return new PaginaResultados(
+                repositorio.listarResultados(execucaoId, tamanhoValidado, pagina * tamanhoValidado),
+                pagina, tamanhoValidado, total, totalPaginas);
     }
 
     public ComparacaoExecucoes comparar(
@@ -291,19 +378,6 @@ public class EvaluationService {
         return 0.0;
     }
 
-    private double media(double[] valores) {
-        return java.util.Arrays.stream(valores).average().orElse(0.0);
-    }
-
-    private long percentil95(long[] valores) {
-        if (valores.length == 0) {
-            return 0;
-        }
-        java.util.Arrays.sort(valores);
-        int indice = Math.max(0, (int) Math.ceil(valores.length * 0.95) - 1);
-        return valores[indice];
-    }
-
     private void verificarQueda(double delta, String metrica, List<String> motivos) {
         if (delta < -0.05) {
             motivos.add(metrica + " caiu mais de 5 pontos percentuais");
@@ -326,5 +400,23 @@ public class EvaluationService {
 
     private String limpar(String valor) {
         return valor == null || valor.isBlank() ? null : valor.trim();
+    }
+
+    private void validarCaso(CriarCasoRequest requisicao) {
+        if (requisicao == null || requisicao.pergunta() == null
+                || requisicao.termosEsperados() == null || requisicao.documentosEsperados() == null) {
+            throw new BusinessRuleException("O caso de avaliacao esta incompleto.");
+        }
+        if (!requisicao.deveRecusar() && requisicao.termosEsperados().isEmpty()
+                && requisicao.documentosEsperados().isEmpty()) {
+            throw new BusinessRuleException("Informe termos ou documentos esperados para um caso que deve responder.");
+        }
+    }
+
+    private int exigirIntervalo(int valor, int minimo, int maximo, String campo) {
+        if (valor < minimo || valor > maximo) {
+            throw new BusinessRuleException("O " + campo + " deve estar entre " + minimo + " e " + maximo + ".");
+        }
+        return valor;
     }
 }
