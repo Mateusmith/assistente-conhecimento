@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -130,6 +131,21 @@ class ContextPilotApplicationTests {
                 .andExpect(status().isOk());
         http.perform(get("/api/v1/espacos").with(httpBasic("prometheus", "contextpilot_metrics_local")))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void devePermitirPreflightDoFrontendLocal() throws Exception {
+        http.perform(options("/api/v1/espacos")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Access-Control-Request-Method", "GET")
+                        .header("Access-Control-Request-Headers", "authorization"))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Access-Control-Allow-Origin"))
+                        .isEqualTo("http://localhost:3000"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Access-Control-Allow-Methods"))
+                        .contains("GET"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Access-Control-Allow-Headers"))
+                        .containsIgnoringCase("authorization"));
     }
 
     @Test
