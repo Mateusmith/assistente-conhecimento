@@ -2,86 +2,121 @@
 
 ## Contexto
 
-O Assistente de Conhecimento organiza conhecimento privado em espacos. Membros possuem um papel no espaco, mas documentos restritos exigem permissao propria. Consultas geram respostas somente a partir dos trechos acessiveis ao usuario autenticado.
+O sistema transforma documentos privados em respostas verificaveis. Autorizacao,
+qualidade e custo fazem parte do dominio: uma busca nao pode ranquear informacao de
+outro tenant, uma resposta sem fonte deve ser recusada e uma troca de modelo nao pode
+interromper consultas.
 
 ```mermaid
 C4Context
     title Contexto do Assistente de Conhecimento
     Person(usuario, "Colaborador", "Consulta conhecimento autorizado")
-    Person(curador, "Curador", "Publica documentos e avalia respostas")
-    System(contextpilot, "Assistente de Conhecimento", "RAG seguro e verificavel")
-    System_Ext(keycloak, "Keycloak", "Identidade OAuth2/OIDC")
-    System_Ext(openai, "OpenAI", "Geracao e embeddings opcionais")
-    System_Ext(minio, "MinIO ou S3", "Arquivos originais")
-    System_Ext(clamav, "ClamAV", "Verificacao de malware")
-    System_Ext(tesseract, "Tesseract", "OCR de PDFs digitalizados")
-    System_Ext(observabilidade, "Stack de observabilidade", "Metricas e traces")
-    Rel(usuario, contextpilot, "REST ou MCP")
-    Rel(curador, contextpilot, "REST")
-    Rel(contextpilot, keycloak, "Valida JWT")
-    Rel(contextpilot, openai, "HTTPS, quando habilitado")
-    Rel(contextpilot, minio, "API S3")
-    Rel(contextpilot, clamav, "INSTREAM sobre TCP")
-    Rel(contextpilot, tesseract, "Processo local isolado")
-    Rel(contextpilot, observabilidade, "Prometheus e OTLP/Zipkin")
+    Person(curador, "Curador", "Publica e classifica documentos")
+    System(gateway, "Gateway", "Entrada HTTP e balanceamento")
+    System(api, "Assistente de Conhecimento", "RAG seguro, governanca e MCP")
+    System_Ext(keycloak, "Keycloak", "OAuth2/OIDC")
+    System_Ext(postgres, "PostgreSQL + pgvector", "Dados, filas e indices")
+    System_Ext(redis, "Redis", "Rate limits e quotas distribuidas")
+    System_Ext(objetos, "MinIO ou S3", "Arquivos originais")
+    System_Ext(security, "ClamAV + Tesseract", "Antivirus e OCR")
+    System_Ext(ai, "OpenAI opcional", "Geracao e embeddings")
+    System_Ext(obs, "Prometheus, Alertmanager, Grafana e Zipkin", "SLOs e operacao")
+    Rel(usuario, gateway, "REST ou MCP sobre HTTPS")
+    Rel(curador, gateway, "REST sobre HTTPS")
+    Rel(gateway, api, "HTTP na rede privada; balanceia replicas")
+    Rel(api, keycloak, "Valida JWT")
+    Rel(api, postgres, "JDBC e pgvector")
+    Rel(api, redis, "Lua atomico")
+    Rel(api, objetos, "S3")
+    Rel(api, security, "INSTREAM e processo local")
+    Rel(api, ai, "HTTPS quando habilitado")
+    Rel(api, obs, "Metricas e traces")
 ```
 
 ## Modulos
 
 | Pacote | Responsabilidade |
 |---|---|
-| `workspace` | espacos, membros, papeis e verificacao de acesso |
-| `document` | upload, antivirus, S3, OCR, deduplicacao, ACL, fila e fragmentacao |
-| `retrieval` | embeddings e busca hibrida autorizada |
-| `answer` | geracao, validacao de citacoes, historico e feedback |
-| `evaluation` | conjuntos, casos, execucoes e pontuacoes |
-| `mcp` | ferramentas MCP autenticadas e somente de consulta |
-| `audit` | trilha imutavel das operacoes relevantes |
-| `configuration` | seguranca, OpenAPI, OpenAI e configuracoes transversais |
+| `workspace` | espacos, membros, papeis e acesso |
+| `document` | upload, metadados, antivirus, S3, OCR, fila e deteccao de prompt injection |
+| `reindex` | catalogo, construcao em lotes, lease, ativacao e rollback de indices |
+| `retrieval` | filtros, ACL, busca hibrida/semantica/textual e reranking |
+| `answer` | geracao, citacoes, recusa segura, historico e feedback |
+| `governance` | rate limiting, quotas, armazenamento, tokens e custos |
+| `privacy` | exportacao, pseudonimizacao, exclusao e retencao LGPD |
+| `evaluation` | casos e execucoes de regressao RAG |
+| `mcp` | ferramentas autenticadas e somente de consulta |
+| `audit` | trilha das operacoes relevantes |
+| `observability` | gauges operacionais, SLOs e alertas |
 
-## Modelo de dados
+## Dados principais
 
 ```mermaid
 erDiagram
     ESPACOS ||--o{ MEMBROS_ESPACO : possui
     ESPACOS ||--o{ DOCUMENTOS : organiza
-    DOCUMENTOS ||--o{ PERMISSOES_DOCUMENTO : restringe
     DOCUMENTOS ||--o{ TRECHOS_DOCUMENTO : fragmenta
     DOCUMENTOS ||--|| TAREFAS_INGESTAO : processa
+    ESPACOS ||--o{ INDICES_EMBEDDING : versiona
+    INDICES_EMBEDDING ||--o{ VETORES_TRECHO : contem
+    TRECHOS_DOCUMENTO ||--o{ VETORES_TRECHO : representa
     ESPACOS ||--o{ CONSULTAS_RAG : recebe
     CONSULTAS_RAG ||--o{ CITACOES_RESPOSTA : fundamenta
-    CONSULTAS_RAG ||--o{ FEEDBACK_RESPOSTA : avalia
-    ESPACOS ||--o{ CONJUNTOS_AVALIACAO : define
-    CONJUNTOS_AVALIACAO ||--o{ CASOS_AVALIACAO : contem
-    CONJUNTOS_AVALIACAO ||--o{ EXECUCOES_AVALIACAO : executa
-    EXECUCOES_AVALIACAO ||--o{ RESULTADOS_AVALIACAO : produz
+    ESPACOS ||--o{ CONSUMO_IA_DIARIO : mede
+    ESPACOS ||--o{ CONJUNTOS_AVALIACAO : avalia
 ```
 
-## Busca hibrida
+## Recuperacao segura
 
-A consulta combina 70% de similaridade cosseno e 30% de relevancia `tsvector` em portugues. O CTE inicial seleciona somente trechos de documentos prontos e autorizados. Assim, um documento proibido nunca disputa o ranking nem influencia a existencia de uma resposta.
+1. O indice `ATIVO` define o modelo e o espaco vetorial da consulta.
+2. Metadados, datas, MIME, tenant, membros e ACL entram no SQL antes do `LIMIT`.
+3. Trechos suspeitos de prompt injection nao entram no contexto.
+4. A estrategia calcula score hibrido, semantico ou textual.
+5. Um reranker deterministico considera cobertura da pergunta e titulo.
+6. O gerador recebe apenas fontes autorizadas e marcadas.
+7. Marcadores ausentes ou inventados produzem recusa segura.
+
+## Reindexacao blue-green
+
+```mermaid
+stateDiagram-v2
+    [*] --> CONSTRUINDO
+    CONSTRUINDO --> CONSTRUINDO: lote idempotente + lease
+    CONSTRUINDO --> FALHOU: tres falhas
+    CONSTRUINDO --> ATIVO: todos os trechos presentes
+    ATIVO --> ARQUIVADO: troca atomica
+    ARQUIVADO --> ATIVO: rollback se completo
+```
+
+O indice anterior continua atendendo enquanto o novo e construido. Trabalhadores
+inserem vetores com chave unica `(indice_id, trecho_id)`, portanto uma retomada nao
+duplica trabalho. A ativacao bloqueia a linha do espaco, reconta trechos e troca os
+estados na mesma transacao.
+
+## Concorrencia e escala
+
+- ingestao e reindexacao usam `FOR UPDATE SKIP LOCKED`;
+- leases vencidos sao retomados por outra instancia;
+- Redis executa um script Lua atomico para limites compartilhados;
+- binarios ficam no S3/MinIO e nao no heap nem no PostgreSQL;
+- Nginx resolve o servico Docker e distribui requisicoes entre replicas;
+- `docker compose -f compose.yml -f compose.scale.yml up -d --build` inicia tres replicas.
 
 ## Consistencia
 
-- o ClamAV aprova o arquivo antes de qualquer persistencia;
-- o objeto e gravado antes do registro; um rollback remove o objeto por compensacao;
-- registro do documento e criacao da tarefa pertencem a uma transacao;
-- cada hash SHA-256 aparece uma unica vez por espaco;
-- documentos anteriores a V2 continuam legiveis em `BYTEA`; novos documentos usam `S3`;
-- trabalhadores reivindicam tarefas atomicamente com `FOR UPDATE SKIP LOCKED`;
-- substituicao de trechos e conclusao da tarefa pertencem a uma transacao;
-- respostas e suas citacoes sao gravadas juntas;
-- feedback e permissao usam `UPSERT` para repeticao segura.
+- ClamAV aprova antes da persistencia e falha fechado;
+- rollback do banco remove o objeto S3 por compensacao;
+- SHA-256 e verificado a cada leitura;
+- registro do documento e tarefa pertencem a uma transacao;
+- trechos, vetores do indice ativo e conclusao da tarefa sao atomicos;
+- respostas e citacoes sao persistidas juntas;
+- retencao remove consultas e preserva resultados de avaliacao com referencia nula;
+- documentos V1 em `BYTEA` continuam legiveis.
 
-## Ingestao segura
+## Operacao
 
-1. A API valida limite, extensao, assinatura PDF e UTF-8 aplicavel.
-2. O ClamAV recebe o conteudo pelo protocolo `INSTREAM`; falha ou indisponibilidade rejeita o upload.
-3. O SHA-256 identifica duplicatas e acompanha o objeto como metadado.
-4. O arquivo limpo e gravado no bucket privado por uma chave sem nome fornecido pelo cliente.
-5. A fila extrai texto nativo. Em PDF sem camada textual, renderiza ate 20 paginas e executa Tesseract com prazo por pagina.
-6. Apenas texto suficiente segue para fragmentacao, embeddings e estado `PRONTO`.
-
-## Escala
-
-O primeiro limite esperado e a geracao externa, nao o banco. A fila pode ganhar mais replicas da aplicacao sem duplicar uma tarefa. Os arquivos ja estao fora do PostgreSQL, permitindo escalar o banco e o armazenamento separadamente. Para volumes muito maiores, os proximos passos naturais sao particionamento por espaco, workers dedicados de OCR, reindexacao em segundo plano e cotas por locatario.
+Prometheus calcula disponibilidade e p95, enquanto alertas cobrem API indisponivel,
+erros, latencia, fila parada, lease expirado, reindexacao falha e qualidade abaixo de
+80%. Cada alerta aponta para um runbook em `docs/runbooks`. Tokens e custos sao
+agregados por espaco e dia; valores unitarios sao configuraveis para evitar apresentar
+uma estimativa desatualizada como cobranca real.

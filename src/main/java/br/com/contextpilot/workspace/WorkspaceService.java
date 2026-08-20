@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import br.com.contextpilot.audit.AuditService;
+import br.com.contextpilot.reindex.EmbeddingIndexService;
 import br.com.contextpilot.shared.domain.BusinessRuleException;
 import br.com.contextpilot.shared.domain.ResourceNotFoundException;
 import br.com.contextpilot.workspace.WorkspaceModels.AdicionarMembroRequest;
@@ -22,16 +23,19 @@ public class WorkspaceService {
     private final WorkspaceRepository repositorio;
     private final WorkspaceAccessService acesso;
     private final AuditService auditoria;
+    private final EmbeddingIndexService indices;
     private final Clock relogio;
 
     public WorkspaceService(
             WorkspaceRepository repositorio,
             WorkspaceAccessService acesso,
             AuditService auditoria,
+            EmbeddingIndexService indices,
             Clock relogio) {
         this.repositorio = repositorio;
         this.acesso = acesso;
         this.auditoria = auditoria;
+        this.indices = indices;
         this.relogio = relogio;
     }
 
@@ -44,6 +48,7 @@ public class WorkspaceService {
 
         UUID id = UUID.randomUUID();
         repositorio.criar(id, nome, limpar(requisicao.descricao()), usuarioId, Instant.now(relogio));
+        indices.criarInicial(id, usuarioId);
         auditoria.registrar(id, usuarioId, "ESPACO_CRIADO", "ESPACO", id.toString(), Map.of("nome", nome));
         return repositorio.buscar(id, usuarioId).orElseThrow();
     }

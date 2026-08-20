@@ -1,0 +1,25 @@
+services:
+  aplicacao:
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      TLS_TERMINATED_AT_PROXY: "true"
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+      SPRINGDOC_API_DOCS_ENABLED: "false"
+      SPRINGDOC_SWAGGER_UI_ENABLED: "false"
+      JWT_ISSUER_URI: ${JWT_ISSUER_URI:?Informe um issuer HTTPS}
+      JWT_JWK_SET_URI: ${JWT_JWK_SET_URI:?Informe o JWK Set HTTPS}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Informe as origens HTTPS permitidas}
+    volumes:
+      - ${SECRETS_DIRECTORY:?Informe o diretorio de segredos}:/run/secrets:ro
+
+  gateway:
+    ports: !override
+      - "8443:8443"
+    volumes:
+      - ./docker/nginx/nginx.production.conf:/etc/nginx/nginx.conf:ro
+      - ${TLS_DIRECTORY:?Informe o diretorio TLS}:/run/tls:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://127.0.0.1:8443/health-gateway | grep -q UP"]
+
+# Este arquivo e apenas um overlay de referencia. Em producao, use PostgreSQL,
+# Redis, S3, Keycloak, Prometheus e Alertmanager gerenciados conforme o ambiente.

@@ -5,20 +5,22 @@ import static br.com.contextpilot.answer.AnswerModels.RESPOSTA_SEM_CONTEXTO;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 
 import br.com.contextpilot.answer.AnswerModels.FonteContexto;
+import br.com.contextpilot.answer.AnswerModels.PerguntarRequest;
 import br.com.contextpilot.answer.AnswerModels.RegistrarFeedbackRequest;
 import br.com.contextpilot.answer.AnswerModels.RespostaRag;
 import br.com.contextpilot.answer.AnswerModels.ResultadoGeracao;
 import br.com.contextpilot.audit.AuditService;
+import br.com.contextpilot.governance.GovernanceService;
+import br.com.contextpilot.answer.AnswerIntegrityValidator.Validacao;
 import br.com.contextpilot.retrieval.HybridSearchService;
+import br.com.contextpilot.retrieval.RetrievalModels.EstrategiaBusca;
+import br.com.contextpilot.retrieval.RetrievalModels.FiltrosBusca;
 import br.com.contextpilot.shared.domain.ResourceNotFoundException;
 import br.com.contextpilot.workspace.WorkspaceAccessService;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -28,13 +30,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AnswerService {
 
-    private static final Pattern CITACAO = Pattern.compile("\\[(F\\d+)]");
-
     private final HybridSearchService busca;
     private final AnswerGenerator gerador;
     private final AnswerRepository repositorio;
     private final WorkspaceAccessService acessoEspaco;
     private final AuditService auditoria;
+    private final AnswerIntegrityValidator validador;
+    private final GovernanceService governanca;
     private final MeterRegistry metricas;
     private final Clock relogio;
 
@@ -44,6 +46,8 @@ public class AnswerService {
             AnswerRepository repositorio,
             WorkspaceAccessService acessoEspaco,
             AuditService auditoria,
+            AnswerIntegrityValidator validador,
+            GovernanceService governanca,
             MeterRegistry metricas,
             Clock relogio) {
         this.busca = busca;
@@ -51,15 +55,28 @@ public class AnswerService {
         this.repositorio = repositorio;
         this.acessoEspaco = acessoEspaco;
         this.auditoria = auditoria;
+        this.validador = validador;
+        this.governanca = governanca;
         this.metricas = metricas;
         this.relogio = relogio;
     }
 
     @Transactional
     public RespostaRag perguntar(UUID espacoId, String pergunta, String usuarioId) {
+        return perguntar(espacoId, new PerguntarRequest(pergunta), usuarioId);
+    }
+
+    @Transactional
+    public RespostaRag perguntar(UUID espacoId, PerguntarRequest requisicao, String usuarioId) {
         long inicio = System.nanoTime();
-        String perguntaLimpa = pergunta.trim();
-        var recuperadas = busca.buscar(espacoId, perguntaLimpa, usuarioId);
+        acessoEspaco.exigirMembro(espacoId, usuarioId);
+        governanca.reservarConsulta(espacoId);
+        String perguntaLimpa = requisicao.pergunta().trim();
+        EstrategiaBusca estrategia = requisicao.estrategia() == null
+                ? EstrategiaBusca.HIBRIDA : requisicao.estrategia();
+        FiltrosBusca filtros = requisicao.filtros() == null ? FiltrosBusca.vazios() : requisicao.filtros();
+        var resultadoBusca = busca.buscar(espacoId, perguntaLimpa, usuarioId, estrategia, filtros);
+        var recuperadas = resultadoBusca.fontes();
         List<FonteContexto> fontes = new ArrayList<>();
         for (int indice = 0; indice < recuperadas.size(); indice++) {
             var fonte = recuperadas.get(indice);
@@ -70,7 +87,7 @@ public class AnswerService {
         ResultadoGeracao geracao = fontes.isEmpty()
                 ? new ResultadoGeracao(RESPOSTA_SEM_CONTEXTO, "recusa-segura")
                 : gerador.gerar(perguntaLimpa, fontes);
-        Validacao validacao = validar(geracao.texto(), fontes);
+        Validacao validacao = validador.validar(geracao.texto(), fontes);
         List<FonteContexto> citadas = fontes.stream()
                 .filter(fonte -> validacao.marcadores().contains(fonte.marcador()))
                 .toList();
@@ -79,12 +96,18 @@ public class AnswerService {
         Instant criadaEm = Instant.now(relogio);
 
         repositorio.salvar(consultaId, espacoId, usuarioId, perguntaLimpa, validacao.texto(),
-                validacao.recusa(), geracao.provedor(), latenciaMs, criadaEm, citadas);
+                validacao.recusa(), geracao.provedor(), resultadoBusca.indiceId(), resultadoBusca.modeloEmbedding(),
+                resultadoBusca.estrategia(), geracao.tokensEntrada(), geracao.tokensSaida(),
+                geracao.custoEstimadoUsd(), latenciaMs, criadaEm, citadas);
+        governanca.registrarConsumoIa(espacoId, provedor(geracao.provedor()), geracao.provedor(), "RESPOSTA",
+                geracao.tokensEntrada(), geracao.tokensSaida(), geracao.custoEstimadoUsd());
         metricas.counter("contextpilot.rag.consultas", "resultado", validacao.recusa() ? "recusa" : "respondida").increment();
         metricas.timer("contextpilot.rag.latencia", "provedor", geracao.provedor())
                 .record(latenciaMs, TimeUnit.MILLISECONDS);
         auditoria.registrar(espacoId, usuarioId, "CONSULTA_RAG_REALIZADA", "CONSULTA", consultaId.toString(),
-                Map.of("recusada", validacao.recusa(), "fontes", citadas.size(), "provedor", geracao.provedor()));
+                Map.of("recusada", validacao.recusa(), "fontes", citadas.size(), "provedor", geracao.provedor(),
+                        "modeloEmbedding", resultadoBusca.modeloEmbedding(),
+                        "estrategia", resultadoBusca.estrategia().name()));
 
         return repositorio.buscar(consultaId, espacoId, usuarioId).orElseThrow();
     }
@@ -113,24 +136,9 @@ public class AnswerService {
         metricas.counter("contextpilot.rag.feedback", "util", requisicao.util().toString()).increment();
     }
 
-    private Validacao validar(String texto, List<FonteContexto> fontes) {
-        if (RESPOSTA_SEM_CONTEXTO.equals(texto.trim())) {
-            return new Validacao(RESPOSTA_SEM_CONTEXTO, true, Set.of());
-        }
-
-        Set<String> permitidos = fontes.stream().map(FonteContexto::marcador).collect(java.util.stream.Collectors.toSet());
-        Set<String> encontrados = new HashSet<>();
-        var matcher = CITACAO.matcher(texto);
-        while (matcher.find()) {
-            encontrados.add(matcher.group(1));
-        }
-        if (encontrados.isEmpty() || !permitidos.containsAll(encontrados)) {
-            metricas.counter("contextpilot.rag.validacao", "resultado", "citacao_invalida").increment();
-            return new Validacao(RESPOSTA_SEM_CONTEXTO, true, Set.of());
-        }
-        return new Validacao(texto.trim(), false, Set.copyOf(encontrados));
+    private String provedor(String nome) {
+        int separador = nome.indexOf(':');
+        return separador < 0 ? nome : nome.substring(0, separador);
     }
 
-    private record Validacao(String texto, boolean recusa, Set<String> marcadores) {
-    }
 }

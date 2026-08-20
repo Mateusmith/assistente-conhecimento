@@ -22,6 +22,11 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
 
     @Override
     public float[] gerar(String texto) {
+        return gerarComUso(texto).vetor();
+    }
+
+    @Override
+    public ResultadoEmbedding gerarComUso(String texto) {
         JsonNode resposta = openAi.enviar("/v1/embeddings", Map.of(
                 "model", propriedades.modeloEmbedding(),
                 "input", texto,
@@ -35,11 +40,23 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
         for (int indice = 0; indice < valores.size(); indice++) {
             vetor[indice] = valores.get(indice).floatValue();
         }
-        return vetor;
+        int tokens = resposta.path("usage").path("prompt_tokens").asInt(
+                resposta.path("usage").path("total_tokens").asInt(0));
+        return new ResultadoEmbedding(vetor, tokens, propriedades.calcularCustoEmbedding(tokens));
     }
 
     @Override
     public String nome() {
         return "openai:" + propriedades.modeloEmbedding();
+    }
+
+    @Override
+    public String provedor() {
+        return "openai";
+    }
+
+    @Override
+    public int dimensoes() {
+        return propriedades.dimensoes();
     }
 }

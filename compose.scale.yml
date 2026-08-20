@@ -1,0 +1,4 @@
+services:
+  aplicacao:
+    deploy:
+      replicas: 3

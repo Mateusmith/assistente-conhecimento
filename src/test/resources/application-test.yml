@@ -7,6 +7,12 @@ spring:
           jwk-set-uri: http://localhost:9999/realms/teste/protocol/openid-connect/certs
 
 contextpilot:
+  governanca:
+    redis-ativo: false
+    requisicoes-por-minuto: 10000
+    consultas-por-minuto: 10000
+    janela-rate-limit: 1m
+    sal-privacidade: teste-sal-nao-secreto
   antivirus:
     ativo: false
   ocr:
@@ -14,8 +20,14 @@ contextpilot:
   ingestao:
     atraso-inicial-ms: 600000
     intervalo-ms: 600000
+  reindexacao:
+    atraso-inicial-ms: 600000
+    intervalo-ms: 600000
 
 management:
+  health:
+    redis:
+      enabled: false
   tracing:
     sampling:
       probability: 0.0

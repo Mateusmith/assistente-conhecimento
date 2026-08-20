@@ -1,83 +1,76 @@
 # Assistente de Conhecimento
 
-Plataforma Java para transformar documentos corporativos em respostas rastreaveis, sem ignorar quem pode acessar cada informacao. O Assistente de Conhecimento combina RAG, busca hibrida, citacoes verificaveis, permissoes por documento, avaliacoes automatizadas e ferramentas MCP em uma unica aplicacao executavel.
-
-O nome publico do produto e **Assistente de Conhecimento**. Os prefixos tecnicos `CONTEXT_PILOT_*`, o pacote `br.com.contextpilot`, o realm `contextpilot` e as metricas `contextpilot_*` foram preservados para manter compatibilidade com ambientes existentes.
+API Java para transformar documentos corporativos em respostas rastreaveis sem
+ultrapassar a permissao de quem pergunta. O projeto demonstra RAG seguro, busca
+avancada, ingestao de arquivos, governanca multi-tenant e operacao distribuida em um
+sistema executavel, nao em um prototipo isolado.
 
 [![Java 21](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot)](https://spring.io/projects/spring-boot)
-[![Spring AI 2.0](https://img.shields.io/badge/Spring%20AI-2.0-6DB33F)](https://spring.io/projects/spring-ai)
 [![CI](https://github.com/Mateusmith/assistente-conhecimento/actions/workflows/ci.yml/badge.svg)](https://github.com/Mateusmith/assistente-conhecimento/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Problema resolvido
 
-Um chatbot corporativo simples pode recuperar um trecho que o usuario nao deveria ver, inventar uma resposta sem evidencia ou piorar silenciosamente depois de uma mudanca. O Assistente de Conhecimento trata esses riscos como regras de negocio:
+Um chatbot corporativo comum pode recuperar um documento proibido, obedecer a uma
+instrucao escondida no arquivo, inventar uma fonte ou ficar indisponivel durante a
+troca do modelo de embeddings. O Assistente de Conhecimento trata esses riscos como
+regras de negocio:
 
-- a ACL entra na consulta SQL antes da recuperacao, evitando vazamento por pos-filtragem;
-- toda afirmacao entregue precisa apontar para marcadores como `[F1]`;
-- citacoes desconhecidas ou ausentes transformam a saida em recusa segura;
-- documentos sao deduplicados, versionados e processados por uma fila concorrente;
-- arquivos passam pelo ClamAV antes de chegar ao MinIO; se o antivirus estiver indisponivel, o upload e recusado;
-- PDFs sem camada de texto passam por OCR em portugues e ingles com Tesseract;
-- conjuntos de avaliacao medem termos, fontes e recusas esperadas;
-- auditoria registra alteracoes de acesso e consultas sem armazenar tokens;
-- o modo local permite demonstrar o projeto sem chave paga.
+- tenant e ACL entram no SQL antes da ordenacao e do `LIMIT`;
+- cada afirmacao precisa citar uma fonte valida como `[F1]`;
+- trechos suspeitos de prompt injection nao entram no contexto;
+- documentos passam por ClamAV, MinIO/S3, SHA-256 e OCR real;
+- indices de embedding sao construidos blue-green e permitem rollback;
+- busca aceita metadados e compara estrategias hibrida, semantica e textual;
+- Redis aplica limites e quotas compartilhados entre replicas;
+- tokens, custos, SLOs, alertas e tempo de ingestao sao observaveis;
+- exportacao, exclusao, pseudonimizacao e retencao apoiam operacoes LGPD;
+- testes adversariais bloqueiam regressao de isolamento e citacoes.
 
-## Arquitetura
+## Arquitetura resumida
 
 ```mermaid
 flowchart LR
-    U["Cliente / Postman / agente MCP"] --> K["Keycloak OAuth2"]
-    U --> A["Assistente de Conhecimento API"]
-    A --> W["Espacos e ACL"]
-    A --> D["Documentos e ingestao"]
-    A --> R["Busca hibrida segura"]
-    A --> G["Gerador local ou OpenAI"]
-    A --> E["Avaliacoes e feedback"]
-    D --> P[("PostgreSQL + pgvector")]
-    D --> C["ClamAV"]
-    D --> M["MinIO / S3"]
-    D --> T["PDFBox + Tesseract OCR"]
-    R --> P
-    E --> P
-    A --> O["Prometheus / Grafana / Zipkin"]
+    U["Postman / Swagger / cliente MCP"] --> K["Keycloak OAuth2/OIDC"]
+    U --> N["Nginx gateway"]
+    N --> A1["API / worker 1"]
+    N --> A2["API / worker N"]
+    A1 --> P[("PostgreSQL + pgvector")]
+    A2 --> P
+    A1 --> R[("Redis")]
+    A2 --> R
+    A1 --> M["MinIO / S3"]
+    A1 --> C["ClamAV + Tesseract"]
+    A1 --> I["OpenAI opcional"]
+    A1 --> O["Prometheus / Alertmanager / Grafana / Zipkin"]
 ```
 
-O projeto e um monolito modular orientado por capacidades. JDBC explicito deixa visiveis as transacoes, o bloqueio `FOR UPDATE SKIP LOCKED` e a consulta de busca que incorpora a autorizacao. Mais detalhes estao em [ARCHITECTURE.md](docs/ARCHITECTURE.md) e [THREAT-MODEL.md](docs/THREAT-MODEL.md).
-
-## Fluxo RAG
-
-1. Um proprietario cria o espaco e adiciona curadores ou leitores.
-2. Um PDF, TXT ou Markdown e validado, identificado por SHA-256, aprovado pelo ClamAV e armazenado no MinIO.
-3. Um trabalhador reivindica a tarefa sem bloquear outros trabalhadores, extrai texto nativo ou usa OCR, cria trechos sobrepostos e gera embeddings.
-4. A pergunta gera um embedding e executa busca semantica + busca textual em portugues.
-5. O SQL considera apenas documentos `PRONTO` que o usuario pode ler.
-6. O gerador recebe fontes marcadas e trata seu conteudo como dado nao confiavel.
-7. A resposta e validada; somente fontes realmente citadas sao persistidas e devolvidas.
-8. Metricas, feedback, citacoes e auditoria permitem acompanhar o comportamento.
+O projeto e um monolito modular. JDBC explicito torna visiveis as transacoes, leases,
+`UPSERT`, `FOR UPDATE SKIP LOCKED` e a autorizacao dentro da recuperacao. Consulte
+[Arquitetura](docs/ARCHITECTURE.md) e [Modelo de ameacas](docs/THREAT-MODEL.md).
 
 ## Tecnologias
 
-- Java 21, Spring Boot 4.1, Spring Security 7 e Spring AI 2.0 MCP
-- PostgreSQL 17, `pgvector`, Flyway e Spring JDBC
-- MinIO compativel com S3 e AWS SDK for Java para os arquivos originais
-- ClamAV em modo fail-closed e Tesseract OCR (`por+eng`)
-- OAuth2/OIDC com Keycloak e Swagger com Authorization Code + PKCE
-- OpenAI Responses API e Embeddings API como adaptadores opcionais
-- PDFBox para extracao e renderizacao de PDF
-- Micrometer, Prometheus, Grafana, OpenTelemetry e Zipkin
-- JUnit, MockMvc e Testcontainers com PostgreSQL/pgvector e MinIO reais
-- Docker Compose, Postman/Newman e GitHub Actions
+- Java 21, Spring Boot 4.1, Spring Security 7 e Spring AI MCP 2.0
+- PostgreSQL 17, pgvector, Flyway e Spring JDBC
+- Redis com script Lua atomico para limites distribuidos
+- MinIO/S3, AWS SDK, ClamAV, PDFBox e Tesseract `por+eng`
+- OAuth2/OIDC, JWT, Keycloak e Swagger PKCE
+- Prometheus, Alertmanager, Grafana, OpenTelemetry e Zipkin
+- JUnit 5, MockMvc, Testcontainers, JaCoCo, Postman e Newman
+- Docker Compose, Nginx, GitHub Actions e configtree para segredos
 
 ## Inicio rapido
 
 ### Requisitos
 
 - Docker Desktop com Compose
-- Portas livres: `8083`, `54326`, `18084`, `19000`, `19001`, `13310`, `19411`, `19093` e `13003`
+- PowerShell 7 para a carga automatizada
+- portas livres: `8083`, `54326`, `16383`, `18084`, `19000`, `19001`,
+  `13310`, `19411`, `19093`, `19094` e `13003`
 
-### Subir a plataforma
+### Subir tudo
 
 ```powershell
 git clone https://github.com/Mateusmith/assistente-conhecimento.git
@@ -87,50 +80,56 @@ docker compose --profile observability up -d --build
 docker compose ps
 ```
 
-Espere o servico `aplicacao` ficar `healthy`. A primeira construcao baixa as dependencias Maven.
+Espere `aplicacao` e `gateway` ficarem `healthy`.
 
 | Recurso | Endereco | Acesso local |
 |---|---|---|
-| API | http://localhost:8083 | token OAuth2 |
+| API | http://localhost:8083 | Bearer Token |
 | Swagger | http://localhost:8083/swagger-ui.html | `contextpilot-swagger` + PKCE |
 | Keycloak | http://localhost:18084 | `admin` / `admin` |
-| MinIO Console | http://localhost:19001 | `contextpilot` / `contextpilot_storage_local` |
-| ClamAV | `localhost:13310` | protocolo TCP interno |
-| Grafana | http://localhost:13003 | `admin` / `admin_contextpilot` |
-| Prometheus | http://localhost:19093 | rede local Docker |
-| Zipkin | http://localhost:19411 | local |
 | PostgreSQL | `localhost:54326/contextpilot` | `contextpilot` / `contextpilot_local` |
+| Redis | `localhost:16383` | rede local |
+| MinIO Console | http://localhost:19001 | `contextpilot` / `contextpilot_storage_local` |
+| Prometheus | http://localhost:19093 | local |
+| Alertmanager | http://localhost:19094 | local |
+| Grafana | http://localhost:13003 | `admin` / `admin_contextpilot` |
+| Zipkin | http://localhost:19411 | local |
 
-Usuarios de demonstracao no realm `contextpilot`:
+Usuarios de demonstracao:
 
-| Usuario | Senha | Papel criado durante o fluxo |
+| Usuario | Senha | Uso no fluxo |
 |---|---|---|
 | `ana` | `context123` | proprietaria |
 | `bruno` | `context123` | curador |
 | `carla` | `context123` | leitora |
 
-As credenciais existem apenas para desenvolvimento. Altere o arquivo `.env` e o realm em qualquer ambiente compartilhado.
+Essas credenciais sao apenas locais.
 
-### Executar a carga automatizada
+### Carga de ponta a ponta
 
 ```powershell
 ./scripts/smoke-test.ps1
 ```
 
-O script executa 15 etapas: prova ClamAV e MinIO, recupera o arquivo original, valida ACL e RAG citado, registra feedback, executa avaliacao, consulta auditoria/metricas, descobre as ferramentas MCP, exige o bloqueio da assinatura inofensiva EICAR e processa um PDF composto somente por imagem com OCR real.
+O script executa 21 etapas e prova ClamAV, S3, integridade, OCR, ACL, citacoes,
+avaliacao, MCP, metadados, comparacao de busca, governanca, reindexacao blue-green,
+consulta no novo modelo, rollback e exportacao LGPD.
 
 ## Postman
 
-Importe os dois arquivos:
+Importe:
 
 - [colecao](postman/AssistenteConhecimento.postman_collection.json)
 - [ambiente local](postman/AssistenteConhecimento.postman_environment.json)
 
-Defina `document_file` com o caminho absoluto de [politica-reembolso.md](postman/politica-reembolso.md) e execute as pastas na ordem. A colecao salva tokens e identificadores automaticamente e contem assercoes de ACL, citacao, avaliacao e descoberta MCP.
+Defina `document_file` com o caminho absoluto de
+[politica-reembolso.md](postman/politica-reembolso.md) e execute as pastas em ordem.
+Tokens e IDs sao capturados automaticamente. A colecao possui assercoes de ACL,
+fontes, armazenamento, avaliacao, MCP, reindexacao, uso e privacidade.
 
 ## Exemplos da API
 
-Obtenha um token:
+### Token
 
 ```bash
 curl -X POST http://localhost:18084/realms/contextpilot/protocol/openid-connect/token \
@@ -138,11 +137,11 @@ curl -X POST http://localhost:18084/realms/contextpilot/protocol/openid-connect/
   -d "grant_type=password&client_id=contextpilot-postman&username=ana&password=context123"
 ```
 
-Crie um espaco:
+### Espaco e membro
 
 ```http
 POST /api/v1/espacos
-Authorization: Bearer <token>
+Authorization: Bearer <token-ana>
 Content-Type: application/json
 
 {
@@ -151,54 +150,75 @@ Content-Type: application/json
 }
 ```
 
-Adicione um membro:
+```http
+POST /api/v1/espacos/{espacoId}/membros
+Authorization: Bearer <token-ana>
+Content-Type: application/json
 
-```json
 {
   "usuarioId": "carla",
   "papel": "LEITOR"
 }
 ```
 
-Envie um documento:
+### Upload com metadados
 
 ```bash
 curl -X POST "http://localhost:8083/api/v1/espacos/<espacoId>/documentos" \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer <token-ana>" \
   -F "titulo=Politica de reembolso" \
   -F "visibilidade=RESTRITO" \
+  -F 'metadados={"departamento":"financeiro","tags":["reembolso","politica"]}' \
   -F "arquivo=@postman/politica-reembolso.md"
 ```
 
-Conceda acesso ao documento:
+Metadados aceitam ate 20 chaves e valores escalares ou listas curtas de texto.
 
-```json
+### Permissao e pergunta filtrada
+
+```http
+POST /api/v1/espacos/{espacoId}/documentos/{documentoId}/permissoes
+Authorization: Bearer <token-ana>
+Content-Type: application/json
+
 {
   "usuarioId": "carla",
   "nivel": "LEITURA"
 }
 ```
 
-Pergunte com RAG:
-
 ```http
-POST /api/v1/espacos/<espacoId>/consultas
+POST /api/v1/espacos/{espacoId}/consultas
 Authorization: Bearer <token-carla>
 Content-Type: application/json
 
 {
-  "pergunta": "Qual e o prazo para solicitar reembolso?"
+  "pergunta": "Qual e o prazo para solicitar reembolso?",
+  "estrategia": "HIBRIDA",
+  "filtros": {
+    "metadados": {"departamento": "financeiro"},
+    "tags": ["reembolso"],
+    "tipoMime": "text/markdown"
+  }
 }
 ```
+
+`estrategia` aceita `HIBRIDA`, `SEMANTICA` ou `TEXTUAL`. Os filtros opcionais tambem
+aceitam `documentos`, `criadoDe` e `criadoAte` em ISO-8601.
 
 Resposta resumida:
 
 ```json
 {
   "consultaId": "c3acb68e-bbd5-46a9-b118-522bcf414469",
-  "resposta": "Com base no conhecimento disponivel: O prazo para solicitar reembolso e de 30 dias apos a data da compra. [F1]",
+  "resposta": "Com base no conhecimento disponivel: O prazo e de 30 dias. [F1]",
   "recusada": false,
   "provedorIa": "local-extrativo-v1",
+  "modeloEmbedding": "local-hashing-v1",
+  "estrategiaBusca": "HIBRIDA",
+  "tokensEntrada": 0,
+  "tokensSaida": 0,
+  "custoEstimadoUsd": 0,
   "fontes": [
     {
       "marcador": "F1",
@@ -211,74 +231,173 @@ Resposta resumida:
 }
 ```
 
-Crie um caso de avaliacao:
+### Comparar estrategias
 
-```json
+```http
+POST /api/v1/espacos/{espacoId}/buscas/comparacoes
+Authorization: Bearer <token-carla>
+Content-Type: application/json
+
 {
-  "pergunta": "Qual e o prazo para solicitar reembolso?",
-  "termosEsperados": ["30 dias"],
-  "documentosEsperados": ["<documentoId>"],
-  "deveRecusar": false
+  "pergunta": "prazo para reembolso",
+  "filtros": {"tags": ["reembolso"]}
 }
 ```
 
-## Provedores de IA
+A resposta mostra os resultados de cada estrategia e a sobreposicao entre semantica e
+textual. Isso permite medir uma mudanca antes de alterar o padrao.
 
-O padrao e `local`. Ele usa embeddings por hashing e um gerador extrativo deterministico. Isso e intencional para testes, demonstracoes offline e CI; ele nao finge ser um LLM.
+## Reindexacao sem parada
 
-Para usar OpenAI:
+Modelos habilitados:
+
+```http
+GET /api/v1/espacos/{espacoId}/indices-embedding/modelos
+Authorization: Bearer <token-ana>
+```
+
+Iniciar a versao local v2:
+
+```http
+POST /api/v1/espacos/{espacoId}/indices-embedding
+Authorization: Bearer <token-ana>
+Content-Type: application/json
+
+{"modelo":"local-hashing-v2"}
+```
+
+O estado progride de `CONSTRUINDO` para `ATIVO`. O indice anterior vira `ARQUIVADO`.
+Rollback:
+
+```http
+POST /api/v1/espacos/{espacoId}/indices-embedding/{indiceAnteriorId}/ativacao
+Authorization: Bearer <token-ana>
+```
+
+Somente o proprietario opera indices. Uma construcao incompleta ou falha nunca assume
+consultas.
+
+## Governanca e LGPD
+
+```http
+PUT /api/v1/espacos/{espacoId}/governanca
+Authorization: Bearer <token-ana>
+Content-Type: application/json
+
+{
+  "limiteArmazenamentoBytes": 1073741824,
+  "limiteConsultasDia": 1000,
+  "limiteUploadsDia": 100,
+  "retencaoConsultasDias": 365
+}
+```
+
+```http
+GET /api/v1/espacos/{espacoId}/governanca/uso
+Authorization: Bearer <token-ana>
+```
+
+Uso inclui bytes, consultas, uploads, tokens e custo estimado dos ultimos 30 dias.
+Respostas `429` incluem `Retry-After`, `X-RateLimit-Limit` e
+`X-RateLimit-Remaining`.
+
+```http
+GET /api/v1/privacidade/exportacao
+Authorization: Bearer <token>
+```
+
+```http
+DELETE /api/v1/privacidade/meus-dados?confirmar=true
+Authorization: Bearer <token>
+```
+
+A exclusao apaga consultas e vinculos, pseudonimiza autoria/auditoria e recusa operar
+enquanto o usuario for proprietario de um espaco. A exportacao inclui espacos,
+documentos, consultas, feedbacks e eventos pessoais de auditoria.
+
+## Provedores e custo
+
+O modo padrao `local` possui dois embeddings deterministas e geracao extrativa. Ele e
+reprodutivel, offline e nao se apresenta como LLM.
+
+Para OpenAI:
 
 ```dotenv
 CONTEXT_PILOT_PROVEDOR_IA=openai
 OPENAI_API_KEY=sk-...
 CONTEXT_PILOT_MODELO_CHAT=gpt-5-mini
 CONTEXT_PILOT_MODELO_EMBEDDING=text-embedding-3-small
+AI_CHAT_INPUT_COST_PER_MILLION=0
+AI_CHAT_OUTPUT_COST_PER_MILLION=0
+AI_EMBEDDING_COST_PER_MILLION=0
 ```
 
-O adaptador usa a Responses API com `store=false`, limita a saida e valida os marcadores devolvidos. Os embeddings sao solicitados com 384 dimensoes para manter um unico indice. Consulte a [documentacao da Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) e de [embeddings](https://developers.openai.com/api/docs/guides/embeddings).
+Preencha os tres custos conforme o contrato vigente. O projeto mantem zero por padrao
+para nao transformar preco antigo em telemetria enganosa. Tokens reais retornados pelo
+provedor continuam contabilizados.
 
-> Trocar o provedor depois de indexar documentos exige reindexacao completa, pois vetores de modelos diferentes nao devem compartilhar o mesmo espaco vetorial.
+## Escala horizontal
 
-## MCP
+O gateway evita conflito de portas e os workers usam leases retomaveis:
 
-O servidor MCP stateless fica em `/mcp` e exige o mesmo Bearer Token da API. Ele expoe apenas ferramentas que reaplicam a ACL:
+```powershell
+docker compose -f compose.yml -f compose.scale.yml --profile observability up -d --build
+docker compose -f compose.yml -f compose.scale.yml ps
+```
 
-- `listarDocumentos`
-- `buscarConhecimento`
-- `consultarComFontes`
+O overlay inicia tres replicas. PostgreSQL, Redis e MinIO sao compartilhados. Nao use
+`container_name`, pois ele impede replicas.
 
-As ferramentas nao permitem upload nem mudanca de permissao. Esse limite reduz o impacto de prompt injection e de clientes MCP comprometidos.
+## Seguranca de producao
+
+O Spring importa `/run/secrets` por configtree. Veja
+[docker/secrets/README.md](docker/secrets/README.md) e
+[compose.production.example.yml](compose.production.example.yml). O perfil `prod`
+interrompe o boot se detectar credencial curta/de demonstracao, identidade sem HTTPS ou
+TLS sem terminacao confiavel. O exemplo termina TLS 1.2/1.3 no Nginx, encaminha o protocolo
+ao Spring e desativa Swagger em producao.
+
+Antes de usar o overlay, disponibilize `tls.crt` e `tls.key` em `TLS_DIRECTORY`, os
+segredos descritos na documentacao e informe `JWT_ISSUER_URI`, `JWT_JWK_SET_URI` e
+`CORS_ALLOWED_ORIGINS`. Valide a composicao antes da implantacao:
+
+```powershell
+docker compose -f compose.yml -f compose.production.example.yml config --quiet
+```
+
+Controles adicionais:
+
+- HSTS em HTTPS, CSP, `no-store`, `Referrer-Policy` e `Permissions-Policy`;
+- CORS por lista de origens;
+- ClamAV fail-closed e verificacao SHA-256;
+- nenhuma pergunta, resposta ou token em labels de metrica;
+- benchmark adversarial publicado pelo CI.
+
+## Observabilidade
+
+O dashboard provisionado cobre disponibilidade, p95, fila, leases, ingestao, OCR,
+antivirus, armazenamento, reindexacao, quotas, tokens e custo. Prometheus carrega
+[regras de SLO e alerta](docker/prometheus/rules.yml), e cada alerta aponta para
+[runbooks](docs/runbooks).
 
 ## Testes
 
 ```powershell
-$env:JAVA_HOME='C:\Program Files\Java\jdk-21'
-./mvnw verify
+./mvnw clean verify
 ```
 
-A suite usa uma imagem real `pgvector/pgvector:pg17`. Entre os cenarios cobertos:
+A suite usa PostgreSQL/pgvector e MinIO reais via Testcontainers e cobre:
 
-- embeddings deterministas e normalizados;
-- fragmentacao e sobreposicao;
-- geracao extrativa com citacao e recusa;
-- migracao Flyway e extensao `vector`;
-- armazenamento de novos documentos em MinIO e leitura retrocompativel de `BYTEA` legado;
-- protocolo `INSTREAM` do ClamAV, rejeicao de ameaca e comportamento fail-closed;
-- preferencia por texto nativo e acionamento do OCR quando necessario;
-- API e metricas protegidas por credenciais diferentes;
-- documento restrito invisivel antes da permissao;
-- RAG citado depois da permissao;
-- feedback, avaliacao e trilha de auditoria.
+- migracoes Flyway e retrocompatibilidade de `BYTEA` legado;
+- S3, hash, ClamAV, OCR, fragmentacao e embeddings;
+- API, metricas, OAuth2, tenant e ACL de documento;
+- metadados, tres estrategias e filtro cross-tenant;
+- reindexacao v1 para v2 e rollback;
+- prompt injection, citacao falsa e resposta sem fonte;
+- quotas, uso, exportacao e exclusao LGPD.
 
-## Decisoes e limites
-
-- Novos binarios ficam no MinIO/S3. A migracao preserva e continua lendo documentos antigos em `BYTEA`, permitindo atualizacao sem parada nem reenvio.
-- O antivirus e fail-closed: indisponibilidade ou resposta inesperada impede a persistencia do arquivo.
-- O OCR e acionado somente quando o PDF nao possui texto nativo suficiente e limita paginas, DPI e tempo por pagina.
-- A fila no PostgreSQL e adequada ao monolito e usa `SKIP LOCKED`. Kafka seria custo operacional sem beneficio neste escopo.
-- A autorizacao e repetida no SQL de busca, nao aplicada depois do `LIMIT`.
-- O projeto nao fornece uma interface web; Swagger, Postman, MCP e a API sao os clientes intencionais.
-- Para producao, use TLS, um gerenciador de segredos, backup, politicas de retencao e Keycloak fora do modo `start-dev`.
+O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCoCo em
+`target/site/jacoco`.
 
 ## Documentacao
 
@@ -286,11 +405,13 @@ A suite usa uma imagem real `pgvector/pgvector:pg17`. Entre os cenarios cobertos
 - [Modelo de ameacas](docs/THREAT-MODEL.md)
 - [ADR 001: monolito modular](docs/adr/001-modular-monolith.md)
 - [ADR 002: ACL dentro da recuperacao](docs/adr/002-retrieval-authorization.md)
-- [ADR 003: modo de IA intercambiavel](docs/adr/003-ai-providers.md)
-- [ADR 004: ingestao segura e armazenamento de objetos](docs/adr/004-secure-document-ingestion.md)
+- [ADR 003: provedores de IA](docs/adr/003-ai-providers.md)
+- [ADR 004: ingestao segura](docs/adr/004-secure-document-ingestion.md)
+- [ADR 005: indices blue-green](docs/adr/005-blue-green-embedding-indexes.md)
+- [ADR 006: governanca distribuida](docs/adr/006-distributed-governance.md)
 - [Politica de seguranca](SECURITY.md)
 - [Como contribuir](CONTRIBUTING.md)
-- [Historico de versoes](CHANGELOG.md)
+- [Historico](CHANGELOG.md)
 
 ## Licenca
 

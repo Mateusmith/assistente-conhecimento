@@ -1,0 +1,63 @@
+groups:
+  - name: assistente-conhecimento-slos
+    interval: 30s
+    rules:
+      - record: contextpilot:slo_disponibilidade:ratio_5m
+        expr: 1 - (sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count[5m])), 0.001))
+      - record: contextpilot:slo_latencia_p95:seconds_5m
+        expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[5m])) by (le))
+      - alert: AssistenteConhecimentoIndisponivel
+        expr: up{job="contextpilot"} == 0
+        for: 2m
+        labels:
+          severidade: critica
+        annotations:
+          resumo: "API do Assistente de Conhecimento indisponivel"
+          runbook: "docs/runbooks/api-unavailable.md"
+      - alert: ErrosApiConsumindoSlo
+        expr: contextpilot:slo_disponibilidade:ratio_5m < 0.99
+        for: 10m
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "Disponibilidade abaixo do SLO de 99%"
+          runbook: "docs/runbooks/api-errors.md"
+      - alert: LatenciaP95Alta
+        expr: contextpilot:slo_latencia_p95:seconds_5m > 2
+        for: 10m
+        labels:
+          severidade: media
+        annotations:
+          resumo: "Latencia HTTP p95 acima de dois segundos"
+          runbook: "docs/runbooks/high-latency.md"
+      - alert: FilaIngestaoParada
+        expr: max(contextpilot_ingestao_fila_mais_antiga_segundos) > 300
+        for: 5m
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "A tarefa de ingestao mais antiga aguarda ha mais de cinco minutos"
+          runbook: "docs/runbooks/ingestion-backlog.md"
+      - alert: LeaseIngestaoExpirado
+        expr: max(contextpilot_ingestao_leases_expirados) > 0
+        for: 2m
+        labels:
+          severidade: media
+        annotations:
+          resumo: "Existe trabalho abandonado pronto para ser retomado"
+          runbook: "docs/runbooks/ingestion-backlog.md"
+      - alert: ReindexacaoFalhando
+        expr: increase(contextpilot_reindexacao_total{resultado="falha"}[10m]) > 2
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "Reindexacao de embeddings falhou repetidamente"
+          runbook: "docs/runbooks/reindexing-failure.md"
+      - alert: QualidadeRagRegrediu
+        expr: contextpilot_avaliacao_taxa_acerto < 0.8
+        for: 15m
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "Taxa da ultima avaliacao RAG abaixo de 80%"
+          runbook: "docs/runbooks/rag-quality.md"

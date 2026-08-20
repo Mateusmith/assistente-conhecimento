@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "84a98c0e-8812-49f7-a108-7dff55c66612",
     "name": "Assistente de Conhecimento API",
-    "description": "Fluxo completo: autenticacao, ClamAV, MinIO, ingestao, ACL de documento, RAG citado, feedback, avaliacao e auditoria.",
+    "description": "Fluxo completo 1.2: autenticacao, ingestao segura, ACL, RAG citado, filtros, comparacao de busca, reindexacao blue-green, governanca, LGPD, avaliacao e MCP.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -82,16 +82,20 @@
             "body": {"mode": "formdata", "formdata": [
               {"key": "titulo", "value": "Politica de reembolso", "type": "text"},
               {"key": "visibilidade", "value": "RESTRITO", "type": "text"},
+              {"key": "metadados", "value": "{\"departamento\":\"financeiro\",\"tags\":[\"reembolso\",\"politica\"]}", "type": "text"},
               {"key": "arquivo", "type": "file", "src": "{{document_file}}"}
             ]},
             "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/documentos"
           },
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento aceito', () => pm.response.to.have.status(201));", "const documento = pm.response.json();", "pm.test('Binario salvo no MinIO apos verificacao limpa', () => { pm.expect(documento.armazenamento).to.eql('S3'); pm.expect(documento.resultadoAntivirus).to.eql('LIMPO'); });", "pm.environment.set('documento_id', documento.id);"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento aceito', () => pm.response.to.have.status(201));", "const documento = pm.response.json();", "pm.test('Binario salvo no MinIO apos verificacao limpa', () => { pm.expect(documento.armazenamento).to.eql('S3'); pm.expect(documento.resultadoAntivirus).to.eql('LIMPO'); });", "pm.environment.set('documento_id', documento.id);", "pm.environment.set('tentativas_processamento', '0');"], "type": "text/javascript"}}]
         },
         {
           "name": "Consultar processamento",
           "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/documentos/{{documento_id}}"},
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Documento consultado', () => pm.response.to.have.status(200));", "pm.test('Ingestao nativa concluida', () => { const documento = pm.response.json(); pm.expect(documento.estado).to.eql('PRONTO'); pm.expect(documento.origemTexto).to.eql('NATIVO'); pm.expect(documento.paginasOcr).to.eql(0); });"], "type": "text/javascript"}}]
+          "event": [
+            {"listen": "prerequest", "script": {"exec": ["setTimeout(() => {}, 500);"], "type": "text/javascript"}},
+            {"listen": "test", "script": {"exec": ["pm.test('Documento consultado', () => pm.response.to.have.status(200));", "const documento = pm.response.json();", "const tentativas = Number(pm.environment.get('tentativas_processamento') || 0);", "if (documento.estado === 'FALHOU') { pm.test('Ingestao sem falha', () => pm.expect.fail(documento.erroProcessamento || 'Falha de ingestao')); pm.environment.unset('tentativas_processamento'); } else if (documento.estado !== 'PRONTO' && tentativas < 20) { pm.environment.set('tentativas_processamento', String(tentativas + 1)); pm.execution.setNextRequest(pm.info.requestName); } else { pm.environment.unset('tentativas_processamento'); pm.test('Ingestao nativa concluida', () => { pm.expect(documento.estado).to.eql('PRONTO'); pm.expect(documento.origemTexto).to.eql('NATIVO'); pm.expect(documento.paginasOcr).to.eql(0); }); }"], "type": "text/javascript"}}
+          ]
         },
         {
           "name": "Baixar original do MinIO",
@@ -213,6 +217,54 @@
             "url": "{{base_url}}/mcp"
           },
           "event": [{"listen": "test", "script": {"exec": ["pm.test('Ferramentas listadas', () => pm.response.to.have.status(200));", "pm.test('Tres ferramentas publicadas', () => { const nomes = pm.response.json().result.tools.map(t => t.name); pm.expect(nomes).to.include.members(['listarDocumentos', 'buscarConhecimento', 'consultarComFontes']); pm.expect(nomes).to.have.lengthOf(3); });"], "type": "text/javascript"}}]
+        }
+      ]
+    },
+    {
+      "name": "07 - Busca, indice e governanca",
+      "item": [
+        {
+          "name": "Comparar estrategias de busca",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_carla}}"}],
+            "body": {"mode": "raw", "raw": "{\n  \"pergunta\": \"Qual e o prazo para solicitar reembolso?\",\n  \"filtros\": {\"metadados\": {\"departamento\": \"financeiro\"}, \"tags\": [\"reembolso\"]}\n}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/buscas/comparacoes"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Comparacao concluida', () => pm.response.to.have.status(200));", "pm.test('Tres estrategias retornadas', () => pm.expect(pm.response.json().resultados).to.have.lengthOf(3));"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Listar modelos de embedding",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/indices-embedding/modelos"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Modelos listados', () => pm.response.to.have.status(200));", "pm.test('Modelo v2 disponivel', () => pm.expect(pm.response.json().map(m => m.modelo)).to.include('local-hashing-v2'));"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Iniciar reindexacao blue-green",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}, {"key": "Authorization", "value": "Bearer {{token_ana}}"}],
+            "body": {"mode": "raw", "raw": "{\"modelo\":\"local-hashing-v2\"}"},
+            "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/indices-embedding"
+          },
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Reindexacao aceita', () => pm.response.to.have.status(202));", "pm.environment.set('indice_id', pm.response.json().id);"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Consultar indices apos processamento",
+          "event": [
+            {"listen": "prerequest", "script": {"exec": ["setTimeout(() => {}, 2500);"], "type": "text/javascript"}},
+            {"listen": "test", "script": {"exec": ["pm.test('Indices consultados', () => pm.response.to.have.status(200));", "pm.test('Indice anterior preservado', () => pm.expect(pm.response.json().length).to.be.at.least(2));", "const novo = pm.response.json().find(i => i.id === pm.environment.get('indice_id'));", "pm.test('Novo indice completo ou ativo', () => pm.expect(['ATIVO', 'CONSTRUINDO']).to.include(novo.estado));"], "type": "text/javascript"}}
+          ],
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/indices-embedding"}
+        },
+        {
+          "name": "Consultar uso e custos",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/governanca/uso"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Uso consultado', () => pm.response.to.have.status(200));", "pm.test('Armazenamento e consumo contabilizados', () => { const uso = pm.response.json(); pm.expect(uso.armazenamentoUsadoBytes).to.be.above(0); pm.expect(uso.consultasHoje).to.be.above(0); });"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Exportar dados LGPD de Carla",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_carla}}"}], "url": "{{base_url}}/api/v1/privacidade/exportacao"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Exportacao entregue', () => pm.response.to.have.status(200));", "pm.test('Dados pertencem a Carla', () => pm.expect(pm.response.json().usuarioId).to.eql('carla'));"], "type": "text/javascript"}}]
         }
       ]
     }

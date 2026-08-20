@@ -27,8 +27,8 @@ public class OpenApiConfig {
         return new OpenAPI()
                 .info(new Info()
                         .title("Assistente de Conhecimento API")
-                        .version("1.0.0")
-                        .description("Conhecimento corporativo com RAG seguro, fontes verificaveis e MCP."))
+                        .version("1.2.0")
+                        .description("RAG corporativo com ACL, indices blue-green, governanca, LGPD e MCP."))
                 .components(new Components().addSecuritySchemes("oauth2", esquema))
                 .addSecurityItem(new SecurityRequirement().addList("oauth2"));
     }

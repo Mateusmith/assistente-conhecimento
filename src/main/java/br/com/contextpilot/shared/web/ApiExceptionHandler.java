@@ -8,6 +8,7 @@ import br.com.contextpilot.shared.domain.BusinessRuleException;
 import br.com.contextpilot.shared.domain.ConflictException;
 import br.com.contextpilot.shared.domain.ForbiddenOperationException;
 import br.com.contextpilot.shared.domain.ResourceNotFoundException;
+import br.com.contextpilot.shared.domain.RateLimitExceededException;
 import br.com.contextpilot.shared.domain.ServiceUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
@@ -53,6 +54,14 @@ public class ApiExceptionHandler {
         return resposta(HttpStatus.SERVICE_UNAVAILABLE, "SERVICO_INDISPONIVEL", excecao.getMessage(), requisicao, List.of());
     }
 
+    @ExceptionHandler(RateLimitExceededException.class)
+    ResponseEntity<ApiError> limite(RateLimitExceededException excecao, HttpServletRequest requisicao) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", Long.toString(excecao.tentarNovamenteEmSegundos()))
+                .body(criarErro(HttpStatus.TOO_MANY_REQUESTS, "LIMITE_EXCEDIDO", excecao.getMessage(),
+                        requisicao, List.of()));
+    }
+
     @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})
     ResponseEntity<ApiError> validacao(BindException excecao, HttpServletRequest requisicao) {
         var campos = excecao.getBindingResult().getFieldErrors().stream()
@@ -77,7 +86,15 @@ public class ApiExceptionHandler {
             String mensagem,
             HttpServletRequest requisicao,
             List<ApiError.CampoInvalido> campos) {
-        return ResponseEntity.status(status).body(new ApiError(
-                Instant.now(relogio), status.value(), codigo, mensagem, requisicao.getRequestURI(), campos));
+        return ResponseEntity.status(status).body(criarErro(status, codigo, mensagem, requisicao, campos));
+    }
+
+    private ApiError criarErro(
+            HttpStatus status,
+            String codigo,
+            String mensagem,
+            HttpServletRequest requisicao,
+            List<ApiError.CampoInvalido> campos) {
+        return new ApiError(Instant.now(relogio), status.value(), codigo, mensagem, requisicao.getRequestURI(), campos);
     }
 }

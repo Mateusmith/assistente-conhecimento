@@ -31,7 +31,7 @@ public class AnswerController {
 
     @PostMapping
     RespostaRag perguntar(@PathVariable UUID espacoId, @Valid @RequestBody PerguntarRequest requisicao) {
-        return servico.perguntar(espacoId, requisicao.pergunta(), usuarioAtual.obterId());
+        return servico.perguntar(espacoId, requisicao, usuarioAtual.obterId());
     }
 
     @GetMapping

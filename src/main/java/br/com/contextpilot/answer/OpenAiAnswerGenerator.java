@@ -56,7 +56,11 @@ class OpenAiAnswerGenerator implements AnswerGenerator {
         if (texto.isBlank()) {
             throw new IllegalStateException("A OpenAI nao retornou texto na resposta.");
         }
-        return new ResultadoGeracao(texto.trim(), "openai:" + propriedades.modeloChat());
+        int tokensEntrada = resposta.path("usage").path("input_tokens").asInt(0);
+        int tokensSaida = resposta.path("usage").path("output_tokens").asInt(0);
+        java.math.BigDecimal custo = propriedades.calcularCustoChat(tokensEntrada, tokensSaida);
+        return new ResultadoGeracao(
+                texto.trim(), "openai:" + propriedades.modeloChat(), tokensEntrada, tokensSaida, custo);
     }
 
     private String extrairTexto(JsonNode resposta) {

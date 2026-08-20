@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import br.com.contextpilot.audit.AuditService;
+import br.com.contextpilot.governance.GovernanceService;
 import br.com.contextpilot.document.DocumentModels.ConcederPermissaoRequest;
 import br.com.contextpilot.document.DocumentModels.DocumentoResponse;
 import br.com.contextpilot.document.DocumentModels.ResultadoAntivirus;
@@ -25,6 +26,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class DocumentService {
@@ -37,6 +41,8 @@ public class DocumentService {
     private final ObjectStorage objetos;
     private final DocumentContentStorage conteudos;
     private final MalwareScanner antivirus;
+    private final ObjectMapper json;
+    private final GovernanceService governanca;
     private final Clock relogio;
     private final long tamanhoMaximo;
 
@@ -47,6 +53,8 @@ public class DocumentService {
             ObjectStorage objetos,
             DocumentContentStorage conteudos,
             MalwareScanner antivirus,
+            ObjectMapper json,
+            GovernanceService governanca,
             Clock relogio,
             @Value("${contextpilot.documentos.tamanho-maximo-bytes}") long tamanhoMaximo) {
         this.repositorio = repositorio;
@@ -55,6 +63,8 @@ public class DocumentService {
         this.objetos = objetos;
         this.conteudos = conteudos;
         this.antivirus = antivirus;
+        this.json = json;
+        this.governanca = governanca;
         this.relogio = relogio;
         this.tamanhoMaximo = tamanhoMaximo;
     }
@@ -64,13 +74,16 @@ public class DocumentService {
             UUID espacoId,
             String titulo,
             VisibilidadeDocumento visibilidade,
+            String metadados,
             MultipartFile arquivo,
             String usuarioId) {
         acessoEspaco.exigirCuradoria(espacoId, usuarioId);
         validarTitulo(titulo);
+        governanca.reservarUpload(espacoId, arquivo == null ? 0 : arquivo.getSize());
         byte[] conteudo = ler(arquivo);
         String tipoMime = detectarTipo(arquivo.getOriginalFilename(), conteudo);
         String hash = calcularHash(conteudo);
+        String metadadosJson = validarMetadados(metadados);
 
         if (repositorio.existeHash(espacoId, hash)) {
             throw new ConflictException("Este conteudo ja foi enviado para o espaco.");
@@ -88,7 +101,7 @@ public class DocumentService {
         objetos.armazenar(chaveArmazenamento, conteudo, tipoMime, hash);
         removerObjetoSeTransacaoFalhar(chaveArmazenamento);
         repositorio.criar(documentoId, espacoId, titulo.trim(), nomeArquivo, tipoMime,
-                visibilidade, hash, chaveArmazenamento, conteudo.length, resultadoAntivirus,
+                visibilidade, hash, chaveArmazenamento, conteudo.length, metadadosJson, resultadoAntivirus,
                 verificadoEm, usuarioId, agora);
         auditoria.registrar(espacoId, usuarioId, "DOCUMENTO_ENVIADO", "DOCUMENTO", documentoId.toString(),
                 Map.of("titulo", titulo.trim(), "tipoMime", tipoMime, "tamanhoBytes", conteudo.length,
@@ -201,6 +214,47 @@ public class DocumentService {
         if (titulo == null || titulo.trim().length() < 3 || titulo.trim().length() > 180) {
             throw new BusinessRuleException("O titulo deve ter entre 3 e 180 caracteres.");
         }
+    }
+
+    private String validarMetadados(String valor) {
+        if (valor == null || valor.isBlank()) {
+            return "{}";
+        }
+        try {
+            JsonNode raiz = json.readTree(valor);
+            if (!raiz.isObject() || raiz.size() > 20) {
+                throw new BusinessRuleException("Metadados devem ser um objeto JSON com no maximo 20 campos.");
+            }
+            var campos = raiz.properties().iterator();
+            while (campos.hasNext()) {
+                var campo = campos.next();
+                if (!campo.getKey().matches("[A-Za-z0-9_-]{1,60}")) {
+                    throw new BusinessRuleException("Chaves de metadados aceitam letras, numeros, _ e -.");
+                }
+                validarValorMetadado(campo.getValue());
+            }
+            return json.writeValueAsString(raiz);
+        } catch (JacksonException excecao) {
+            throw new BusinessRuleException("Metadados devem conter um JSON valido.");
+        }
+    }
+
+    private void validarValorMetadado(JsonNode valor) {
+        if (valor.isTextual() && valor.asText().length() <= 200) {
+            return;
+        }
+        if (valor.isBoolean() || valor.isNumber()) {
+            return;
+        }
+        if (valor.isArray() && valor.size() <= 20) {
+            for (JsonNode item : valor) {
+                if (!item.isTextual() || item.asText().length() > 60) {
+                    throw new BusinessRuleException("Listas de metadados aceitam ate 20 textos de 60 caracteres.");
+                }
+            }
+            return;
+        }
+        throw new BusinessRuleException("Valores de metadados devem ser texto, numero, booleano ou lista de textos.");
     }
 
     private void removerObjetoSeTransacaoFalhar(String chaveArmazenamento) {

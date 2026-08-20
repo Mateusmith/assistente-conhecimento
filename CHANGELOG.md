@@ -4,6 +4,28 @@ Todas as mudancas relevantes deste projeto sao registradas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
+## [1.2.0] - 2026-08-18
+
+### Adicionado
+
+- Indices de embedding blue-green com lotes idempotentes, lease, troca atomica e rollback.
+- Modelo local `local-hashing-v2` para demonstrar a reindexacao sem dependencia paga.
+- Busca hibrida, semantica e textual com metadados, datas, MIME e reranking.
+- Redis com rate limiting e quotas distribuidas de consulta, upload e armazenamento.
+- Telemetria diaria de tokens e custo estimado por espaco.
+- Exportacao, exclusao, pseudonimizacao e retencao configuravel para LGPD.
+- Deteccao de prompt injection, benchmark adversarial e relatorio bloqueante no CI.
+- Gateway Nginx e overlay com tres replicas, incluindo retomada de leases expirados.
+- SLOs, Alertmanager, novos paineis Grafana e runbooks operacionais.
+- Configtree, validacao de segredos, TLS obrigatorio em `prod` e cabecalhos defensivos.
+
+### Alterado
+
+- Consultas registram indice, modelo, estrategia, tokens e custo utilizados.
+- Uploads aceitam metadados JSON pesquisaveis.
+- Smoke test passa de 15 para 21 verificacoes de ponta a ponta.
+- Colecao Postman inclui comparacao de busca, reindexacao, governanca e LGPD.
+
 ## [1.1.0] - 2026-08-17
 
 ### Adicionado
@@ -40,3 +62,4 @@ e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 [1.0.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.0.0
 [1.1.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.1.0
+[1.2.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.2.0

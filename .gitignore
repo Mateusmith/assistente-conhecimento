@@ -5,6 +5,9 @@ target/
 logs/
 data/
 documents/
+docker/secrets/*
+!docker/secrets/README.md
+docker/tls/
 dependency-reduced-pom.xml
 *.log
 .DS_Store

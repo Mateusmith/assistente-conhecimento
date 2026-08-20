@@ -3,6 +3,8 @@ package br.com.contextpilot.document;
 import java.time.Instant;
 import java.util.UUID;
 
+import tools.jackson.databind.JsonNode;
+
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -60,6 +62,7 @@ public final class DocumentModels {
             Instant verificadoAntivirusEm,
             OrigemTexto origemTexto,
             int paginasOcr,
+            JsonNode metadados,
             VisibilidadeDocumento visibilidade,
             EstadoDocumento estado,
             int versao,

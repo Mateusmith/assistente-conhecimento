@@ -3,12 +3,10 @@ package br.com.contextpilot.retrieval;
 import java.text.Normalizer;
 import java.util.Locale;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(name = "contextpilot.ia.provedor", havingValue = "local", matchIfMissing = true)
 class LocalEmbeddingProvider implements EmbeddingProvider {
 
     private final int dimensoes;
@@ -40,6 +38,16 @@ class LocalEmbeddingProvider implements EmbeddingProvider {
     @Override
     public String nome() {
         return "local-hashing-v1";
+    }
+
+    @Override
+    public String provedor() {
+        return "local";
+    }
+
+    @Override
+    public int dimensoes() {
+        return dimensoes;
     }
 
     private void adicionar(float[] vetor, String termo, float peso) {

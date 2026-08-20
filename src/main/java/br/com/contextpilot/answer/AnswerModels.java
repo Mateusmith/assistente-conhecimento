@@ -1,12 +1,16 @@
 package br.com.contextpilot.answer;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.Valid;
+import br.com.contextpilot.retrieval.RetrievalModels.EstrategiaBusca;
+import br.com.contextpilot.retrieval.RetrievalModels.FiltrosBusca;
 
 public final class AnswerModels {
 
@@ -15,7 +19,14 @@ public final class AnswerModels {
     private AnswerModels() {
     }
 
-    public record PerguntarRequest(@NotBlank @Size(max = 2000) String pergunta) {
+    public record PerguntarRequest(
+            @NotBlank @Size(max = 2000) String pergunta,
+            EstrategiaBusca estrategia,
+            @Valid FiltrosBusca filtros) {
+
+        public PerguntarRequest(String pergunta) {
+            this(pergunta, EstrategiaBusca.HIBRIDA, FiltrosBusca.vazios());
+        }
     }
 
     public record RegistrarFeedbackRequest(
@@ -38,6 +49,11 @@ public final class AnswerModels {
             String resposta,
             boolean recusada,
             String provedorIa,
+            String modeloEmbedding,
+            EstrategiaBusca estrategiaBusca,
+            int tokensEntrada,
+            int tokensSaida,
+            BigDecimal custoEstimadoUsd,
             long latenciaMs,
             Instant criadaEm,
             List<FonteResposta> fontes) {
@@ -53,6 +69,15 @@ public final class AnswerModels {
             double pontuacao) {
     }
 
-    public record ResultadoGeracao(String texto, String provedor) {
+    public record ResultadoGeracao(
+            String texto,
+            String provedor,
+            int tokensEntrada,
+            int tokensSaida,
+            BigDecimal custoEstimadoUsd) {
+
+        public ResultadoGeracao(String texto, String provedor) {
+            this(texto, provedor, 0, 0, BigDecimal.ZERO);
+        }
     }
 }

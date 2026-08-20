@@ -41,8 +41,10 @@ public class DocumentController {
             @PathVariable UUID espacoId,
             @RequestParam String titulo,
             @RequestParam(defaultValue = "ESPACO") VisibilidadeDocumento visibilidade,
+            @RequestParam(required = false) String metadados,
             @RequestPart("arquivo") MultipartFile arquivo) {
-        DocumentoResponse criado = servico.enviar(espacoId, titulo, visibilidade, arquivo, usuarioAtual.obterId());
+        DocumentoResponse criado = servico.enviar(
+                espacoId, titulo, visibilidade, metadados, arquivo, usuarioAtual.obterId());
         return ResponseEntity.created(URI.create("/api/v1/espacos/" + espacoId + "/documentos/" + criado.id())).body(criado);
     }
 

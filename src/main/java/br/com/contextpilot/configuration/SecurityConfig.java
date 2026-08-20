@@ -74,7 +74,9 @@ public class SecurityConfig {
         configuracao.setAllowedOrigins(Arrays.stream(origens.split(",")).map(String::trim).toList());
         configuracao.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuracao.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Idempotency-Key"));
-        configuracao.setExposedHeaders(Arrays.asList("Location", "X-Correlation-Id"));
+        configuracao.setExposedHeaders(Arrays.asList(
+                "Location", "X-Correlation-Id", "X-RateLimit-Limit",
+                "X-RateLimit-Remaining", "Retry-After"));
         configuracao.setAllowCredentials(true);
 
         var fonte = new UrlBasedCorsConfigurationSource();
