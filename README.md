@@ -1,9 +1,14 @@
 # Assistente de Conhecimento
 
-API Java para transformar documentos corporativos em respostas rastreaveis sem
-ultrapassar a permissao de quem pergunta. O projeto demonstra RAG seguro, busca
-avancada, ingestao de arquivos, governanca multi-tenant e operacao distribuida em um
-sistema executavel, nao em um prototipo isolado.
+O Assistente de Conhecimento funciona como um buscador inteligente e privado para
+empresas. A organizacao envia politicas, manuais, contratos e imagens; depois, cada
+colaborador faz perguntas em linguagem natural e recebe uma resposta objetiva com as
+fontes exatas usadas pela IA.
+
+O objetivo e tornar o conhecimento interno facil de consultar sem vazar documentos:
+a API pesquisa somente o que aquele usuario tem permissao para acessar, bloqueia
+conteudo malicioso e mantem um rastro verificavel de cada resposta. Tudo roda como um
+sistema Java completo, com seguranca, banco de dados, testes e observabilidade.
 
 [![Java 21](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot)](https://spring.io/projects/spring-boot)
