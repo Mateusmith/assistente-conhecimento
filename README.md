@@ -393,7 +393,7 @@ A suite usa PostgreSQL/pgvector e MinIO reais via Testcontainers e cobre:
 - API, metricas, OAuth2, tenant e ACL de documento;
 - metadados, tres estrategias e filtro cross-tenant;
 - reindexacao v1 para v2 e rollback;
-- prompt injection, citacao falsa e resposta sem fonte;
+- prompt injection, citacao falsa, cross-tenant e documento sem permissao;
 - quotas, uso, exportacao e exclusao LGPD.
 
 O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCoCo em
