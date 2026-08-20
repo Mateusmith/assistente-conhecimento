@@ -57,8 +57,14 @@ public final class AnswerModels {
             String resposta,
             boolean recusada,
             String provedorIa,
+            UUID indiceEmbeddingId,
             String modeloEmbedding,
             EstrategiaBusca estrategiaBusca,
+            String versaoPrompt,
+            String impressaoPrompt,
+            int candidatosRecuperados,
+            int fontesContexto,
+            int dadosSensiveisProtegidos,
             int tokensEntrada,
             int tokensSaida,
             BigDecimal custoEstimadoUsd,
@@ -80,12 +86,16 @@ public final class AnswerModels {
     public record ResultadoGeracao(
             String texto,
             String provedor,
+            String versaoPrompt,
+            String impressaoPrompt,
+            int dadosSensiveisProtegidos,
             int tokensEntrada,
             int tokensSaida,
             BigDecimal custoEstimadoUsd) {
 
         public ResultadoGeracao(String texto, String provedor) {
-            this(texto, provedor, 0, 0, BigDecimal.ZERO);
+            this(texto, provedor, "nao-aplicavel", PromptTrace.impressao(provedor),
+                    0, 0, 0, BigDecimal.ZERO);
         }
     }
 }

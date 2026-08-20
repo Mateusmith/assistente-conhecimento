@@ -72,7 +72,9 @@ public final class EvaluationModels {
             String estado,
             String erro,
             int totalCasos,
+            int casosProcessados,
             int casosAprovados,
+            boolean cancelamentoSolicitado,
             double taxaAcerto,
             double recallMedio,
             double precisaoMedia,
@@ -84,6 +86,13 @@ public final class EvaluationModels {
             Instant iniciadaEm,
             Instant finalizadaEm,
             List<ResultadoCaso> resultados) {
+    }
+
+    record TrabalhoAvaliacao(
+            UUID execucaoId,
+            UUID conjuntoId,
+            UUID espacoId,
+            String usuarioId) {
     }
 
     public record ComparacaoExecucoes(

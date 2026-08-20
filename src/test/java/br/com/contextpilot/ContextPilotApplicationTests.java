@@ -32,6 +32,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -47,6 +48,7 @@ import org.testcontainers.containers.wait.strategy.Wait;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class ContextPilotApplicationTests {
 
     @Container
@@ -107,7 +109,7 @@ class ContextPilotApplicationTests {
                 .query(Integer.class).single();
 
         assertThat(extensao).isOne();
-        assertThat(migracoes).isEqualTo(4);
+        assertThat(migracoes).isEqualTo(5);
     }
 
     @Test
@@ -175,6 +177,10 @@ class ContextPilotApplicationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.recusada").value(false))
                 .andExpect(jsonPath("$.resposta").value(org.hamcrest.Matchers.containsString("[F1]")))
+                .andExpect(jsonPath("$.versaoPrompt").isNotEmpty())
+                .andExpect(jsonPath("$.impressaoPrompt", org.hamcrest.Matchers.hasLength(64)))
+                .andExpect(jsonPath("$.candidatosRecuperados", org.hamcrest.Matchers.greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.fontesContexto", org.hamcrest.Matchers.greaterThanOrEqualTo(1)))
                 .andExpect(jsonPath("$.fontes[0].documentoId").value(documentoId.toString()))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         UUID consultaId = UUID.fromString(json.readTree(resposta).path("consultaId").asText());
@@ -187,25 +193,32 @@ class ContextPilotApplicationTests {
 
         UUID conjuntoId = criarConjunto(espacoId);
         adicionarCaso(espacoId, conjuntoId, documentoId);
-        String execucaoBase = http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
+        String agendamentoBase = http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
                         .with(usuario("ana")))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.id").isNotEmpty())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        UUID execucaoBaseId = UUID.fromString(json.readTree(agendamentoBase).path("id").asText());
+        String execucaoBase = aguardarExecucao(espacoId, conjuntoId, execucaoBaseId, "CONCLUIDA");
+        http.perform(get("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{execucaoId}",
+                        espacoId, conjuntoId, execucaoBaseId).with(usuario("ana")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.estado").value("CONCLUIDA"))
                 .andExpect(jsonPath("$.casosAprovados").value(1))
+                .andExpect(jsonPath("$.casosProcessados").value(1))
                 .andExpect(jsonPath("$.taxaAcerto").value(1.0))
                 .andExpect(jsonPath("$.recallMedio").value(1.0))
                 .andExpect(jsonPath("$.precisaoMedia").value(1.0))
                 .andExpect(jsonPath("$.mrrMedio").value(1.0))
-                .andExpect(jsonPath("$.resultados[0].orcamentoRespeitado").value(true))
-                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-        UUID execucaoBaseId = UUID.fromString(json.readTree(execucaoBase).path("id").asText());
+                .andExpect(jsonPath("$.resultados[0].orcamentoRespeitado").value(true));
+        assertThat(json.readTree(execucaoBase).path("estado").asText()).isEqualTo("CONCLUIDA");
 
-        String execucaoAtual = http.perform(post(
+        String agendamentoAtual = http.perform(post(
                         "/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoId)
                         .with(usuario("ana")))
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-        UUID execucaoAtualId = UUID.fromString(json.readTree(execucaoAtual).path("id").asText());
+        UUID execucaoAtualId = UUID.fromString(json.readTree(agendamentoAtual).path("id").asText());
+        aguardarExecucao(espacoId, conjuntoId, execucaoAtualId, "CONCLUIDA");
         http.perform(get("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{execucaoId}/comparacoes/{baseId}",
                         espacoId, conjuntoId, execucaoAtualId, execucaoBaseId).with(usuario("ana")))
                 .andExpect(status().isOk())
@@ -517,11 +530,13 @@ class ContextPilotApplicationTests {
                                  "documentosEsperados":[],"deveRecusar":true}
                                 """))
                 .andExpect(status().isCreated());
-        http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoFalha)
+        String agendamentoFalha = http.perform(post("/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes", espacoId, conjuntoFalha)
                         .with(usuario("ana")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.estado").value("FALHOU"))
-                .andExpect(jsonPath("$.erro").value(org.hamcrest.Matchers.containsString("RateLimit")));
+                .andExpect(status().isAccepted())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        UUID execucaoFalhaId = UUID.fromString(json.readTree(agendamentoFalha).path("id").asText());
+        String execucaoFalha = aguardarExecucao(espacoId, conjuntoFalha, execucaoFalhaId, "FALHOU");
+        assertThat(json.readTree(execucaoFalha).path("erro").asText()).contains("RateLimit");
 
         String conversa = http.perform(post("/api/v1/espacos/{espacoId}/conversas", espacoId)
                         .with(usuario("carla"))
@@ -639,6 +654,29 @@ class ContextPilotApplicationTests {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json.writeValueAsBytes(corpo)))
                 .andExpect(status().isCreated());
+    }
+
+    private String aguardarExecucao(
+            UUID espacoId,
+            UUID conjuntoId,
+            UUID execucaoId,
+            String estadoEsperado) throws Exception {
+        for (int tentativa = 0; tentativa < 100; tentativa++) {
+            String resposta = http.perform(get(
+                            "/api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{execucaoId}",
+                            espacoId, conjuntoId, execucaoId).with(usuario("ana")))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            String estado = json.readTree(resposta).path("estado").asText();
+            if (estadoEsperado.equals(estado)) {
+                return resposta;
+            }
+            if ("FALHOU".equals(estado) || "CANCELADA".equals(estado) || "CONCLUIDA".equals(estado)) {
+                throw new AssertionError("Execucao terminou em " + estado + " em vez de " + estadoEsperado);
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("A execucao nao terminou no prazo de teste: " + execucaoId);
     }
 
     private RequestPostProcessor usuario(String nome) {

@@ -2,6 +2,7 @@ package br.com.contextpilot.retrieval;
 
 import java.text.Normalizer;
 import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +40,8 @@ public class HybridSearchService {
     private final GovernanceService governanca;
     private final int limiteFontes;
     private final double pontuacaoMinima;
+    private final int janelaContexto;
+    private final int limiteAncoras;
 
     public HybridSearchService(
             HybridSearchRepository repositorio,
@@ -49,7 +52,9 @@ public class HybridSearchService {
             MeterRegistry metricas,
             GovernanceService governanca,
             @Value("${contextpilot.busca.limite-fontes}") int limiteFontes,
-            @Value("${contextpilot.busca.pontuacao-minima}") double pontuacaoMinima) {
+            @Value("${contextpilot.busca.pontuacao-minima}") double pontuacaoMinima,
+            @Value("${contextpilot.busca.janela-contexto:1}") int janelaContexto,
+            @Value("${contextpilot.busca.limite-ancoras:3}") int limiteAncoras) {
         this.repositorio = repositorio;
         this.indices = indices;
         this.provedores = provedores;
@@ -59,6 +64,8 @@ public class HybridSearchService {
         this.governanca = governanca;
         this.limiteFontes = limiteFontes;
         this.pontuacaoMinima = pontuacaoMinima;
+        this.janelaContexto = Math.max(0, Math.min(janelaContexto, 3));
+        this.limiteAncoras = Math.max(1, Math.min(limiteAncoras, limiteFontes));
     }
 
     public List<FonteRecuperada> buscar(UUID espacoId, String pergunta, String usuarioId) {
@@ -74,7 +81,7 @@ public class HybridSearchService {
         acessoEspaco.exigirMembro(espacoId, usuarioId);
         EstrategiaBusca estrategiaValida = estrategia == null ? EstrategiaBusca.HIBRIDA : estrategia;
         if (pergunta == null || pergunta.isBlank()) {
-            return new ResultadoBusca(null, null, estrategiaValida, List.of());
+            return new ResultadoBusca(null, null, estrategiaValida, 0, List.of());
         }
         FiltrosBusca filtrosValidos = normalizar(filtros);
         ContextoBusca contexto = preparar(espacoId, pergunta.trim());
@@ -121,13 +128,105 @@ public class HybridSearchService {
         List<FonteRecuperada> candidatas = repositorio.buscar(
                 espacoId, contexto.indiceId(), usuarioId, contexto.pergunta(), contexto.embedding(), estrategia, filtros,
                 serializar(filtros.metadados()), serializar(filtros.tags()), limiteFontes * 4);
-        List<FonteRecuperada> fontes = reranquear(candidatas, contexto.pergunta()).stream()
+        List<FonteRecuperada> elegiveis = reranquear(candidatas, contexto.pergunta()).stream()
                 .filter(fonte -> fonte.pontuacao() >= pontuacaoMinima)
-                .limit(limiteFontes)
                 .toList();
+        List<FonteRecuperada> fontes = selecionarContexto(
+                espacoId, usuarioId, estrategia, contexto, elegiveis);
         metricas.counter("contextpilot.busca.total", "estrategia", estrategia.name().toLowerCase())
                 .increment();
-        return new ResultadoBusca(contexto.indiceId(), contexto.modeloEmbedding(), estrategia, fontes);
+        metricas.summary("contextpilot.busca.candidatos").record(candidatas.size());
+        metricas.summary("contextpilot.busca.fontes_contexto").record(fontes.size());
+        return new ResultadoBusca(contexto.indiceId(), contexto.modeloEmbedding(), estrategia,
+                candidatas.size(), fontes);
+    }
+
+    private List<FonteRecuperada> selecionarContexto(
+            UUID espacoId,
+            String usuarioId,
+            EstrategiaBusca estrategia,
+            ContextoBusca contexto,
+            List<FonteRecuperada> elegiveis) {
+        if (elegiveis.isEmpty()) {
+            return List.of();
+        }
+
+        List<FonteRecuperada> ancoras = selecionarDiversas(elegiveis, Math.min(limiteAncoras, limiteFontes));
+        Map<UUID, FonteRecuperada> selecionadas = new LinkedHashMap<>();
+        ancoras.forEach(fonte -> selecionadas.put(fonte.trechoId(), fonte));
+
+        if (janelaContexto > 0 && selecionadas.size() < limiteFontes) {
+            for (FonteRecuperada ancora : ancoras) {
+                List<FonteRecuperada> vizinhas = repositorio.buscarVizinhos(
+                        espacoId, contexto.indiceId(), usuarioId, ancora.documentoId(),
+                        ancora.ordemTrecho() - janelaContexto, ancora.ordemTrecho() + janelaContexto,
+                        contexto.pergunta(), contexto.embedding(), estrategia);
+                for (FonteRecuperada vizinha : vizinhas) {
+                    int distancia = Math.abs(vizinha.ordemTrecho() - ancora.ordemTrecho());
+                    if (distancia == 0) {
+                        continue;
+                    }
+                    double pontuacaoContextual = Math.max(vizinha.pontuacao(),
+                            ancora.pontuacao() * Math.pow(0.78, distancia));
+                    FonteRecuperada contextual = new FonteRecuperada(
+                            vizinha.trechoId(), vizinha.documentoId(), vizinha.tituloDocumento(),
+                            vizinha.ordemTrecho(), vizinha.conteudo(), vizinha.pontuacaoSemantica(),
+                            vizinha.pontuacaoTextual(), Math.min(1.0, pontuacaoContextual));
+                    selecionadas.putIfAbsent(contextual.trechoId(), contextual);
+                }
+            }
+        }
+
+        for (FonteRecuperada candidata : elegiveis) {
+            if (selecionadas.size() >= limiteFontes) {
+                break;
+            }
+            selecionadas.putIfAbsent(candidata.trechoId(), candidata);
+        }
+        return selecionadas.values().stream()
+                .sorted(Comparator.comparingDouble(FonteRecuperada::pontuacao).reversed()
+                        .thenComparing(FonteRecuperada::documentoId)
+                        .thenComparingInt(FonteRecuperada::ordemTrecho))
+                .limit(limiteFontes)
+                .toList();
+    }
+
+    private List<FonteRecuperada> selecionarDiversas(List<FonteRecuperada> candidatas, int limite) {
+        List<FonteRecuperada> restantes = new ArrayList<>(candidatas);
+        List<FonteRecuperada> selecionadas = new ArrayList<>();
+        while (!restantes.isEmpty() && selecionadas.size() < limite) {
+            FonteRecuperada melhor = restantes.stream()
+                    .max(Comparator.<FonteRecuperada>comparingDouble(
+                                    candidata -> pontuacaoMmr(candidata, selecionadas))
+                            .thenComparing(FonteRecuperada::trechoId))
+                    .orElseThrow();
+            selecionadas.add(melhor);
+            restantes.remove(melhor);
+        }
+        return List.copyOf(selecionadas);
+    }
+
+    private double pontuacaoMmr(FonteRecuperada candidata, List<FonteRecuperada> selecionadas) {
+        if (selecionadas.isEmpty()) {
+            return candidata.pontuacao();
+        }
+        double maiorSimilaridade = selecionadas.stream()
+                .mapToDouble(selecionada -> similaridade(candidata.conteudo(), selecionada.conteudo()))
+                .max().orElse(0.0);
+        return candidata.pontuacao() * 0.82 + (1.0 - maiorSimilaridade) * 0.18;
+    }
+
+    private double similaridade(String esquerda, String direita) {
+        Set<String> termosEsquerda = termos(esquerda);
+        Set<String> termosDireita = termos(direita);
+        if (termosEsquerda.isEmpty() || termosDireita.isEmpty()) {
+            return 0.0;
+        }
+        Set<String> uniao = new HashSet<>(termosEsquerda);
+        uniao.addAll(termosDireita);
+        Set<String> intersecao = new HashSet<>(termosEsquerda);
+        intersecao.retainAll(termosDireita);
+        return (double) intersecao.size() / uniao.size();
     }
 
     private List<FonteRecuperada> reranquear(List<FonteRecuperada> candidatas, String pergunta) {

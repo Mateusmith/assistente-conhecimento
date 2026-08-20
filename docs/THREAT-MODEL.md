@@ -27,6 +27,9 @@ API/Keycloak, API/PostgreSQL, API/Redis, API/S3, API/ClamAV/Tesseract e API/prov
 | Segredo no repositorio | `configtree`, arquivos ignorados e validacao obrigatoria no perfil `prod` |
 | Transporte sem protecao | perfil `prod` exige TLS e HSTS e ativado em conexao segura |
 | Retencao excessiva de PII | politica por espaco, expurgo agendado, exportacao e exclusao LGPD |
+| PII ou segredo enviado ao provedor externo | tokenizacao reversivel antes da chamada; valores restaurados somente na API |
+| Falsa explicabilidade | proveniencia de indice, estrategia, prompt e fontes; nenhuma alegacao de cadeia de pensamento |
+| Dataset perdido em reinicio | resultado unico por caso, lease, progresso e retomada por outra replica |
 | Exclusao que deixa tenant orfao | unico proprietario deve transferir/excluir o espaco antes |
 | Abuso MCP | JWT obrigatorio e ferramentas somente de leitura que reaplicam ACL |
 | Token valido para outro servico | emissor, assinatura, validade e audiencia da API sao obrigatorios |
@@ -42,6 +45,7 @@ qualquer caso regressa.
 ## Riscos residuais
 
 - deteccao de prompt injection e defesa em profundidade, nao prova matematica;
+- a tokenizacao por padroes nao reconhece todo nome, endereco ou dado sem formato;
 - ClamAV depende de assinaturas e nao substitui CDR/sandbox em alta criticidade;
 - OCR depende da qualidade e orientacao da imagem;
 - custo e estimativa configuravel, nao fatura do provedor;

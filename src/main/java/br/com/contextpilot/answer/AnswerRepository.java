@@ -35,6 +35,11 @@ class AnswerRepository {
             UUID indiceEmbeddingId,
             String modeloEmbedding,
             EstrategiaBusca estrategia,
+            String versaoPrompt,
+            String impressaoPrompt,
+            int candidatosRecuperados,
+            int fontesContexto,
+            int dadosSensiveisProtegidos,
             int tokensEntrada,
             int tokensSaida,
             BigDecimal custoEstimadoUsd,
@@ -45,11 +50,15 @@ class AnswerRepository {
                         INSERT INTO consultas_rag
                             (id, espaco_id, usuario_id, pergunta, resposta, recusada, provedor_ia,
                              indice_embedding_id, modelo_embedding, estrategia_busca, tokens_entrada,
-                             tokens_saida, custo_estimado_usd, latencia_ms, criada_em)
+                             tokens_saida, custo_estimado_usd, latencia_ms, criada_em,
+                             versao_prompt, impressao_prompt, candidatos_recuperados,
+                             fontes_contexto, dados_sensiveis_protegidos)
                         VALUES
                             (:id, :espacoId, :usuarioId, :pergunta, :resposta, :recusada, :provedor,
                              :indiceId, :modeloEmbedding, :estrategia, :tokensEntrada,
-                             :tokensSaida, :custo, :latencia, :criadaEm)
+                             :tokensSaida, :custo, :latencia, :criadaEm,
+                             :versaoPrompt, :impressaoPrompt, :candidatosRecuperados,
+                             :fontesContexto, :dadosSensiveisProtegidos)
                         """)
                 .param("id", consultaId)
                 .param("espacoId", espacoId)
@@ -61,6 +70,11 @@ class AnswerRepository {
                 .param("indiceId", indiceEmbeddingId)
                 .param("modeloEmbedding", modeloEmbedding)
                 .param("estrategia", estrategia.name())
+                .param("versaoPrompt", versaoPrompt)
+                .param("impressaoPrompt", impressaoPrompt)
+                .param("candidatosRecuperados", candidatosRecuperados)
+                .param("fontesContexto", fontesContexto)
+                .param("dadosSensiveisProtegidos", dadosSensiveisProtegidos)
                 .param("tokensEntrada", tokensEntrada)
                 .param("tokensSaida", tokensSaida)
                 .param("custo", custoEstimadoUsd)
@@ -89,9 +103,10 @@ class AnswerRepository {
 
     Optional<RespostaRag> buscar(UUID consultaId, UUID espacoId, String usuarioId) {
         Optional<CabecalhoResposta> cabecalho = banco.sql("""
-                        SELECT id, pergunta, resposta, recusada, provedor_ia, modelo_embedding,
+                        SELECT id, pergunta, resposta, recusada, provedor_ia, indice_embedding_id, modelo_embedding,
                                estrategia_busca, tokens_entrada, tokens_saida, custo_estimado_usd,
-                               latencia_ms, criada_em
+                               latencia_ms, criada_em, versao_prompt, impressao_prompt,
+                               candidatos_recuperados, fontes_contexto, dados_sensiveis_protegidos
                           FROM consultas_rag
                          WHERE id = :consultaId AND espaco_id = :espacoId AND usuario_id = :usuarioId
                         """)
@@ -104,8 +119,14 @@ class AnswerRepository {
                         rs.getString("resposta"),
                         rs.getBoolean("recusada"),
                         rs.getString("provedor_ia"),
+                        rs.getObject("indice_embedding_id", UUID.class),
                         rs.getString("modelo_embedding"),
                         EstrategiaBusca.valueOf(rs.getString("estrategia_busca")),
+                        rs.getString("versao_prompt"),
+                        rs.getString("impressao_prompt"),
+                        rs.getInt("candidatos_recuperados"),
+                        rs.getInt("fontes_contexto"),
+                        rs.getInt("dados_sensiveis_protegidos"),
                         rs.getInt("tokens_entrada"),
                         rs.getInt("tokens_saida"),
                         rs.getBigDecimal("custo_estimado_usd"),
@@ -117,9 +138,10 @@ class AnswerRepository {
 
     List<RespostaRag> listar(UUID espacoId, String usuarioId, int limite) {
         List<CabecalhoResposta> cabecalhos = banco.sql("""
-                        SELECT id, pergunta, resposta, recusada, provedor_ia, modelo_embedding,
+                        SELECT id, pergunta, resposta, recusada, provedor_ia, indice_embedding_id, modelo_embedding,
                                estrategia_busca, tokens_entrada, tokens_saida, custo_estimado_usd,
-                               latencia_ms, criada_em
+                               latencia_ms, criada_em, versao_prompt, impressao_prompt,
+                               candidatos_recuperados, fontes_contexto, dados_sensiveis_protegidos
                           FROM consultas_rag
                          WHERE espaco_id = :espacoId AND usuario_id = :usuarioId
                          ORDER BY criada_em DESC
@@ -134,8 +156,14 @@ class AnswerRepository {
                         rs.getString("resposta"),
                         rs.getBoolean("recusada"),
                         rs.getString("provedor_ia"),
+                        rs.getObject("indice_embedding_id", UUID.class),
                         rs.getString("modelo_embedding"),
                         EstrategiaBusca.valueOf(rs.getString("estrategia_busca")),
+                        rs.getString("versao_prompt"),
+                        rs.getString("impressao_prompt"),
+                        rs.getInt("candidatos_recuperados"),
+                        rs.getInt("fontes_contexto"),
+                        rs.getInt("dados_sensiveis_protegidos"),
                         rs.getInt("tokens_entrada"),
                         rs.getInt("tokens_saida"),
                         rs.getBigDecimal("custo_estimado_usd"),
@@ -184,7 +212,9 @@ class AnswerRepository {
     private RespostaRag montar(CabecalhoResposta cabecalho) {
         return new RespostaRag(
                 cabecalho.id(), cabecalho.pergunta(), cabecalho.resposta(), cabecalho.recusada(),
-                cabecalho.provedor(), cabecalho.modeloEmbedding(), cabecalho.estrategia(),
+                cabecalho.provedor(), cabecalho.indiceEmbeddingId(), cabecalho.modeloEmbedding(), cabecalho.estrategia(),
+                cabecalho.versaoPrompt(), cabecalho.impressaoPrompt(), cabecalho.candidatosRecuperados(),
+                cabecalho.fontesContexto(), cabecalho.dadosSensiveisProtegidos(),
                 cabecalho.tokensEntrada(), cabecalho.tokensSaida(), cabecalho.custoEstimadoUsd(),
                 cabecalho.latenciaMs(), cabecalho.criadaEm(), listarFontes(cabecalho.id()));
     }
@@ -200,8 +230,14 @@ class AnswerRepository {
             String resposta,
             boolean recusada,
             String provedor,
+            UUID indiceEmbeddingId,
             String modeloEmbedding,
             EstrategiaBusca estrategia,
+            String versaoPrompt,
+            String impressaoPrompt,
+            int candidatosRecuperados,
+            int fontesContexto,
+            int dadosSensiveisProtegidos,
             int tokensEntrada,
             int tokensSaida,
             BigDecimal custoEstimadoUsd,

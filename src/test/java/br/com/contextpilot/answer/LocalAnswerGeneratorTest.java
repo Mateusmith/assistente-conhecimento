@@ -22,7 +22,7 @@ class LocalAnswerGeneratorTest {
         var resultado = gerador.gerar("Qual e o prazo para reembolso?", List.of(fonte));
 
         assertThat(resultado.texto()).contains("30 dias", "[F1]");
-        assertThat(resultado.provedor()).isEqualTo("local-extrativo-v1");
+        assertThat(resultado.provedor()).isEqualTo("local-extrativo-v2");
     }
 
     @Test

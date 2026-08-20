@@ -41,6 +41,24 @@ function Esperar-Metrica([string]$consulta, [string]$descricao) {
     throw "Metrica agregada ausente no Prometheus: $descricao."
 }
 
+function Esperar-ExecucaoAvaliacao(
+        [string]$espacoId,
+        [string]$conjuntoId,
+        [string]$execucaoId,
+        [string]$token) {
+    for ($tentativa = 0; $tentativa -lt 60; $tentativa++) {
+        $execucao = Invoke-RestMethod `
+            "$BaseUrl/api/v1/espacos/$espacoId/avaliacoes/$conjuntoId/execucoes/$execucaoId" `
+            -Headers (Cabecalho $token)
+        if ($execucao.estado -eq "CONCLUIDA") { return $execucao }
+        if ($execucao.estado -in @("FALHOU", "CANCELADA")) {
+            throw "Avaliacao $execucaoId terminou em $($execucao.estado): $($execucao.erro)"
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Tempo limite da avaliacao $execucaoId excedido."
+}
+
 Write-Host "[1/23] Validando saude, autenticacao e audiencia JWT"
 $saude = Invoke-RestMethod "$BaseUrl/actuator/health"
 if ($saude.status -ne "UP") { throw "Aplicacao indisponivel." }
@@ -99,6 +117,10 @@ $resposta = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espa
 if ($resposta.recusada -or $resposta.resposta -notmatch '\[F1\]' -or $resposta.fontes[0].documentoId -ne $documento.id) {
     throw "Resposta RAG nao possui a citacao esperada."
 }
+if ($resposta.impressaoPrompt.Length -ne 64 -or $resposta.candidatosRecuperados -lt 1 -or
+    $resposta.fontesContexto -lt $resposta.fontes.Count) {
+    throw "Resposta RAG nao possui o rastro de explicabilidade esperado."
+}
 
 Write-Host "[6/23] Registrando feedback"
 Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/consultas/$($resposta.consultaId)/feedback" `
@@ -117,8 +139,10 @@ $caso = @{
 }
 Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/casos" `
     -Headers (Cabecalho $tokenAna) -ContentType "application/json" -Body ($caso | ConvertTo-Json) | Out-Null
-$execucaoBase = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" -Headers (Cabecalho $tokenAna)
-$execucao = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" -Headers (Cabecalho $tokenAna)
+$agendamentoBase = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" -Headers (Cabecalho $tokenAna)
+$execucaoBase = Esperar-ExecucaoAvaliacao $espaco.id $conjunto.id $agendamentoBase.id $tokenAna
+$agendamento = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes" -Headers (Cabecalho $tokenAna)
+$execucao = Esperar-ExecucaoAvaliacao $espaco.id $conjunto.id $agendamento.id $tokenAna
 $comparacaoAvaliacao = Invoke-RestMethod `
     "$BaseUrl/api/v1/espacos/$($espaco.id)/avaliacoes/$($conjunto.id)/execucoes/$($execucao.id)/comparacoes/$($execucaoBase.id)" `
     -Headers (Cabecalho $tokenAna)

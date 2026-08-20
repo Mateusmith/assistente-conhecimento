@@ -13,10 +13,12 @@ import br.com.contextpilot.evaluation.EvaluationModels.CasoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.ConjuntoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.ExecucaoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.ResultadoCaso;
+import br.com.contextpilot.evaluation.EvaluationModels.TrabalhoAvaliacao;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 class EvaluationRepository {
@@ -124,16 +126,140 @@ class EvaluationRepository {
                 .list();
     }
 
-    void iniciarExecucao(UUID id, UUID conjuntoId, String usuarioId, int total, Instant instante) {
+    void agendarExecucao(UUID id, UUID conjuntoId, String usuarioId, int total, Instant instante) {
         banco.sql("""
                         INSERT INTO execucoes_avaliacao
                             (id, conjunto_id, executada_por, estado, total_casos, iniciada_em)
-                        VALUES (:id, :conjuntoId, :usuarioId, 'EXECUTANDO', :total, :instante)
+                        VALUES (:id, :conjuntoId, :usuarioId, 'PENDENTE', :total, :instante)
                         """)
                 .param("id", id)
                 .param("conjuntoId", conjuntoId)
                 .param("usuarioId", usuarioId)
                 .param("total", total)
+                .param("instante", instante(instante))
+                .update();
+    }
+
+    @Transactional
+    Optional<TrabalhoAvaliacao> reivindicarProxima(
+            String trabalhadorId,
+            Instant agora,
+            Instant bloqueadoAte) {
+        Optional<TrabalhoAvaliacao> trabalho = banco.sql("""
+                        SELECT e.id, e.conjunto_id, c.espaco_id, e.executada_por
+                          FROM execucoes_avaliacao e
+                          JOIN conjuntos_avaliacao c ON c.id = e.conjunto_id
+                         WHERE e.cancelamento_solicitado = FALSE
+                           AND (
+                               e.estado = 'PENDENTE'
+                               OR (e.estado = 'EXECUTANDO' AND e.bloqueado_ate < :agora)
+                           )
+                         ORDER BY e.iniciada_em, e.id
+                         FOR UPDATE OF e SKIP LOCKED
+                         LIMIT 1
+                        """)
+                .param("agora", instante(agora))
+                .query((rs, linha) -> new TrabalhoAvaliacao(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("conjunto_id", UUID.class),
+                        rs.getObject("espaco_id", UUID.class),
+                        rs.getString("executada_por")))
+                .optional();
+        trabalho.ifPresent(item -> banco.sql("""
+                        UPDATE execucoes_avaliacao
+                           SET estado = 'EXECUTANDO', trabalhador_id = :trabalhadorId,
+                               bloqueado_ate = :bloqueadoAte
+                         WHERE id = :id
+                        """)
+                .param("id", item.execucaoId())
+                .param("trabalhadorId", trabalhadorId)
+                .param("bloqueadoAte", instante(bloqueadoAte))
+                .update());
+        return trabalho;
+    }
+
+    List<CasoAvaliacao> listarCasosPendentes(UUID conjuntoId, UUID execucaoId) {
+        return banco.sql("""
+                        SELECT c.id, c.conjunto_id, c.pergunta, c.termos_esperados::text,
+                               c.documentos_esperados::text, c.deve_recusar,
+                               c.latencia_maxima_ms, c.custo_maximo_usd
+                          FROM casos_avaliacao c
+                         WHERE c.conjunto_id = :conjuntoId
+                           AND NOT EXISTS (
+                               SELECT 1 FROM resultados_avaliacao r
+                                WHERE r.execucao_id = :execucaoId AND r.caso_id = c.id
+                           )
+                         ORDER BY c.criado_em, c.id
+                        """)
+                .param("conjuntoId", conjuntoId)
+                .param("execucaoId", execucaoId)
+                .query((rs, linha) -> new CasoAvaliacao(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("conjunto_id", UUID.class),
+                        rs.getString("pergunta"),
+                        lerStrings(rs.getString("termos_esperados")),
+                        lerUuids(rs.getString("documentos_esperados")),
+                        rs.getBoolean("deve_recusar"),
+                        rs.getObject("latencia_maxima_ms", Long.class),
+                        rs.getBigDecimal("custo_maximo_usd")))
+                .list();
+    }
+
+    void renovarLease(UUID execucaoId, String trabalhadorId, Instant bloqueadoAte) {
+        banco.sql("""
+                        UPDATE execucoes_avaliacao
+                           SET bloqueado_ate = :bloqueadoAte
+                         WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
+                        """)
+                .param("id", execucaoId)
+                .param("trabalhadorId", trabalhadorId)
+                .param("bloqueadoAte", instante(bloqueadoAte))
+                .update();
+    }
+
+    boolean cancelamentoSolicitado(UUID execucaoId) {
+        return banco.sql("SELECT cancelamento_solicitado FROM execucoes_avaliacao WHERE id = :id")
+                .param("id", execucaoId)
+                .query(Boolean.class)
+                .optional()
+                .orElse(true);
+    }
+
+    void registrarProgresso(UUID execucaoId, String trabalhadorId) {
+        banco.sql("""
+                        UPDATE execucoes_avaliacao
+                           SET casos_processados = (
+                               SELECT COUNT(*)::integer FROM resultados_avaliacao WHERE execucao_id = :id
+                           )
+                         WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
+                        """)
+                .param("id", execucaoId)
+                .param("trabalhadorId", trabalhadorId)
+                .update();
+    }
+
+    void solicitarCancelamento(UUID execucaoId, Instant instante) {
+        banco.sql("""
+                        UPDATE execucoes_avaliacao
+                           SET cancelamento_solicitado = TRUE,
+                               estado = CASE WHEN estado = 'PENDENTE' THEN 'CANCELADA' ELSE estado END,
+                               finalizada_em = CASE WHEN estado = 'PENDENTE' THEN :instante ELSE finalizada_em END,
+                               bloqueado_ate = CASE WHEN estado = 'PENDENTE' THEN NULL ELSE bloqueado_ate END
+                         WHERE id = :id AND estado IN ('PENDENTE', 'EXECUTANDO')
+                        """)
+                .param("id", execucaoId)
+                .param("instante", instante(instante))
+                .update();
+    }
+
+    void cancelarExecucao(UUID execucaoId, String trabalhadorId, Instant instante) {
+        banco.sql("""
+                        UPDATE execucoes_avaliacao
+                           SET estado = 'CANCELADA', finalizada_em = :instante, bloqueado_ate = NULL
+                         WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
+                        """)
+                .param("id", execucaoId)
+                .param("trabalhadorId", trabalhadorId)
                 .param("instante", instante(instante))
                 .update();
     }
@@ -148,6 +274,7 @@ class EvaluationRepository {
                             (:id, :execucaoId, :casoId, :consultaId, :aprovado, :termos,
                              :fontes, :precisao, :mrr, :recusa, :latencia, :custo,
                              :orcamento, :detalhes)
+                        ON CONFLICT (execucao_id, caso_id) DO NOTHING
                         """)
                 .param("id", UUID.randomUUID())
                 .param("execucaoId", execucaoId)
@@ -177,7 +304,8 @@ class EvaluationRepository {
             BigDecimal custoTotalUsd,
             String modeloEmbedding,
             String provedorIa,
-            Instant instante) {
+            Instant instante,
+            String trabalhadorId) {
         banco.sql("""
                         UPDATE execucoes_avaliacao
                            SET estado = 'CONCLUIDA', casos_aprovados = :aprovados,
@@ -185,8 +313,9 @@ class EvaluationRepository {
                                precisao_media = :precisaoMedia, mrr_medio = :mrrMedio,
                                latencia_p95_ms = :latenciaP95Ms, custo_total_usd = :custoTotalUsd,
                                modelo_embedding = :modeloEmbedding, provedor_ia = :provedorIa,
-                               finalizada_em = :instante
-                         WHERE id = :id
+                                casos_processados = total_casos, finalizada_em = :instante,
+                                bloqueado_ate = NULL
+                         WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
                         """)
                 .param("id", id)
                 .param("aprovados", aprovados)
@@ -199,24 +328,28 @@ class EvaluationRepository {
                 .param("modeloEmbedding", modeloEmbedding, java.sql.Types.VARCHAR)
                 .param("provedorIa", provedorIa, java.sql.Types.VARCHAR)
                 .param("instante", instante(instante))
+                .param("trabalhadorId", trabalhadorId)
                 .update();
     }
 
-    void falharExecucao(UUID id, String erro, Instant instante) {
+    void falharExecucao(UUID id, String erro, Instant instante, String trabalhadorId) {
         banco.sql("""
                         UPDATE execucoes_avaliacao
-                           SET estado = 'FALHOU', erro = :erro, finalizada_em = :instante
-                         WHERE id = :id
+                           SET estado = 'FALHOU', erro = :erro, finalizada_em = :instante,
+                               bloqueado_ate = NULL
+                         WHERE id = :id AND trabalhador_id = :trabalhadorId AND estado = 'EXECUTANDO'
                         """)
                 .param("id", id)
                 .param("erro", erro)
                 .param("instante", instante(instante))
+                .param("trabalhadorId", trabalhadorId)
                 .update();
     }
 
     Optional<ExecucaoAvaliacao> buscarExecucao(UUID id, UUID conjuntoId) {
         Optional<CabecalhoExecucao> cabecalho = banco.sql("""
-                        SELECT id, conjunto_id, estado, erro, total_casos, casos_aprovados,
+                        SELECT id, conjunto_id, estado, erro, total_casos, casos_processados,
+                               casos_aprovados, cancelamento_solicitado,
                                COALESCE(taxa_acerto, 0) AS taxa_acerto,
                                recall_medio, precisao_media, mrr_medio, latencia_p95_ms,
                                custo_total_usd, modelo_embedding, provedor_ia,
@@ -234,7 +367,9 @@ class EvaluationRepository {
                             rs.getString("estado"),
                             rs.getString("erro"),
                             rs.getInt("total_casos"),
+                            rs.getInt("casos_processados"),
                             rs.getInt("casos_aprovados"),
+                            rs.getBoolean("cancelamento_solicitado"),
                             rs.getDouble("taxa_acerto"),
                             rs.getDouble("recall_medio"),
                             rs.getDouble("precisao_media"),
@@ -249,13 +384,14 @@ class EvaluationRepository {
                 .optional();
         return cabecalho.map(valor -> new ExecucaoAvaliacao(
                 valor.id(), valor.conjuntoId(), valor.estado(), valor.erro(),
-                valor.totalCasos(), valor.casosAprovados(),
+                valor.totalCasos(), valor.casosProcessados(), valor.casosAprovados(),
+                valor.cancelamentoSolicitado(),
                 valor.taxaAcerto(), valor.recallMedio(), valor.precisaoMedia(), valor.mrrMedio(),
                 valor.latenciaP95Ms(), valor.custoTotalUsd(), valor.modeloEmbedding(), valor.provedorIa(),
                 valor.iniciadaEm(), valor.finalizadaEm(), listarResultados(valor.id())));
     }
 
-    private List<ResultadoCaso> listarResultados(UUID execucaoId) {
+    List<ResultadoCaso> listarResultados(UUID execucaoId) {
         return banco.sql("""
                         SELECT caso_id, consulta_id, aprovado, pontuacao_termos,
                                pontuacao_fontes, precisao_fontes, mrr, recusa_correta,
@@ -307,7 +443,9 @@ class EvaluationRepository {
             String estado,
             String erro,
             int totalCasos,
+            int casosProcessados,
             int casosAprovados,
+            boolean cancelamentoSolicitado,
             double taxaAcerto,
             double recallMedio,
             double precisaoMedia,

@@ -4,6 +4,22 @@ Todas as mudancas relevantes deste projeto sao registradas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
+## [1.4.0] - 2026-08-20
+
+### Adicionado
+
+- Tokenizacao reversivel de e-mail, CPF, CNPJ, telefone, JWT e chave de API antes de chamadas ao provedor externo.
+- Recuperacao contextual com MMR, diversidade de documentos e janela de trechos vizinhos com ACL reaplicada.
+- Rastro por consulta com indice, versao e SHA-256 do prompt, candidatos, fontes de contexto e dados protegidos.
+- Execucoes de avaliacao assincronas, cancelaveis e retomaveis com progresso, lease e `SKIP LOCKED`.
+- Revisao tecnica das decisoes de recuperacao, privacidade, proveniencia e operacao de IA.
+
+### Alterado
+
+- O endpoint de execucao de avaliacao agora responde `202 Accepted` e oferece consulta de estado.
+- O provedor local passa a identificar a geracao como `local-extrativo-v2`.
+- Smoke test e colecao Postman passam a validar explicabilidade e a aguardar jobs de avaliacao.
+
 ## [1.3.0] - 2026-08-20
 
 ### Adicionado
@@ -82,3 +98,4 @@ e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 [1.1.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.1.0
 [1.2.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.2.0
 [1.3.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.3.0
+[1.4.0]: https://github.com/Mateusmith/assistente-conhecimento/releases/tag/v1.4.0

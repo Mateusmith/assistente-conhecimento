@@ -22,6 +22,8 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name = "contextpilot.ia.provedor", havingValue = "local", matchIfMissing = true)
 class LocalAnswerGenerator implements AnswerGenerator {
 
+    private static final String VERSAO_PROMPT = "extrativo-local-v2";
+    private static final String IMPRESSAO_PROMPT = PromptTrace.impressao(VERSAO_PROMPT);
     private static final Set<String> PALAVRAS_COMUNS = Set.of(
             "a", "as", "o", "os", "de", "da", "das", "do", "dos", "e", "em", "no", "na",
             "nos", "nas", "um", "uma", "para", "por", "com", "que", "qual", "quais", "como",
@@ -56,7 +58,7 @@ class LocalAnswerGenerator implements AnswerGenerator {
                 .toList();
 
         if (selecionadas.isEmpty()) {
-            return new ResultadoGeracao(RESPOSTA_SEM_CONTEXTO, "local-extrativo-v1");
+            return resultado(RESPOSTA_SEM_CONTEXTO);
         }
 
         StringBuilder resposta = new StringBuilder("Com base no conhecimento disponivel: ");
@@ -71,7 +73,7 @@ class LocalAnswerGenerator implements AnswerGenerator {
             }
             resposta.append(" [").append(candidata.fonte().marcador()).append(']');
         }
-        return new ResultadoGeracao(resposta.toString(), "local-extrativo-v1");
+        return resultado(resposta.toString());
     }
 
     @Override
@@ -110,6 +112,11 @@ class LocalAnswerGenerator implements AnswerGenerator {
             }
         }
         return quantidade;
+    }
+
+    private ResultadoGeracao resultado(String texto) {
+        return new ResultadoGeracao(texto, "local-extrativo-v2", VERSAO_PROMPT,
+                IMPRESSAO_PROMPT, 0, 0, 0, java.math.BigDecimal.ZERO);
     }
 
     private record FraseCandidata(FonteContexto fonte, String frase, int acertos) {

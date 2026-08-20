@@ -98,7 +98,8 @@ public class AnswerService {
         }
 
         ResultadoGeracao geracao = fontes.isEmpty()
-                ? new ResultadoGeracao(RESPOSTA_SEM_CONTEXTO, "recusa-segura")
+                ? new ResultadoGeracao(RESPOSTA_SEM_CONTEXTO, "recusa-segura", "recusa-segura-v1",
+                        PromptTrace.impressao("recusa-segura-v1"), 0, 0, 0, java.math.BigDecimal.ZERO)
                 : gerador.gerar(perguntaLimpa, fontes, memoriaSegura);
         Validacao validacao = validador.validar(geracao.texto(), fontes);
         List<FonteContexto> citadas = fontes.stream()
@@ -110,7 +111,9 @@ public class AnswerService {
 
         repositorio.salvar(consultaId, espacoId, usuarioId, perguntaLimpa, validacao.texto(),
                 validacao.recusa(), geracao.provedor(), resultadoBusca.indiceId(), resultadoBusca.modeloEmbedding(),
-                resultadoBusca.estrategia(), geracao.tokensEntrada(), geracao.tokensSaida(),
+                resultadoBusca.estrategia(), geracao.versaoPrompt(), geracao.impressaoPrompt(),
+                resultadoBusca.totalCandidatos(), fontes.size(), geracao.dadosSensiveisProtegidos(),
+                geracao.tokensEntrada(), geracao.tokensSaida(),
                 geracao.custoEstimadoUsd(), latenciaMs, criadaEm, citadas);
         governanca.registrarConsumoIa(espacoId, provedor(geracao.provedor()), geracao.provedor(), "RESPOSTA",
                 geracao.tokensEntrada(), geracao.tokensSaida(), geracao.custoEstimadoUsd());
@@ -120,7 +123,9 @@ public class AnswerService {
         auditoria.registrar(espacoId, usuarioId, "CONSULTA_RAG_REALIZADA", "CONSULTA", consultaId.toString(),
                 Map.of("recusada", validacao.recusa(), "fontes", citadas.size(), "provedor", geracao.provedor(),
                         "modeloEmbedding", resultadoBusca.modeloEmbedding(),
-                        "estrategia", resultadoBusca.estrategia().name()));
+                        "estrategia", resultadoBusca.estrategia().name(),
+                        "versaoPrompt", geracao.versaoPrompt(),
+                        "dadosSensiveisProtegidos", geracao.dadosSensiveisProtegidos()));
 
         return repositorio.buscar(consultaId, espacoId, usuarioId).orElseThrow();
     }

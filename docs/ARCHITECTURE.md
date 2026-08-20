@@ -40,12 +40,12 @@ C4Context
 | `workspace` | espacos, membros, papeis e acesso |
 | `document` | upload, metadados, antivirus, S3, OCR, fila e deteccao de prompt injection |
 | `reindex` | catalogo, construcao em lotes, lease, ativacao e rollback de indices |
-| `retrieval` | filtros, ACL, busca hibrida/semantica/textual e reranking |
-| `answer` | geracao, citacoes, recusa segura e feedback |
+| `retrieval` | filtros, ACL, busca hibrida/semantica/textual, MMR e contexto vizinho |
+| `answer` | geracao, proveniencia do prompt, citacoes, recusa segura e feedback |
 | `conversation` | memoria privada, idempotencia, lease e streaming SSE validado |
 | `governance` | rate limiting, quotas, armazenamento, tokens e custos |
-| `privacy` | exportacao, pseudonimizacao, exclusao e retencao LGPD |
-| `evaluation` | casos, metricas de recuperacao e comparacao de regressao RAG |
+| `privacy` | protecao antes da IA externa, exportacao, pseudonimizacao, exclusao e retencao LGPD |
+| `evaluation` | jobs retomaveis, casos, metricas de recuperacao e regressao RAG |
 | `mcp` | ferramentas autenticadas e somente de consulta |
 | `audit` | trilha das operacoes relevantes |
 | `observability` | gauges operacionais, SLOs e alertas |
@@ -77,8 +77,16 @@ erDiagram
 3. Trechos suspeitos de prompt injection nao entram no contexto.
 4. A estrategia calcula score hibrido, semantico ou textual.
 5. Um reranker deterministico considera cobertura da pergunta e titulo.
-6. O gerador recebe apenas fontes autorizadas e marcadas.
-7. Marcadores ausentes ou inventados produzem recusa segura.
+6. MMR escolhe ancoras relevantes sem repetir o mesmo conteudo.
+7. Trechos vizinhos expandem a explicacao; o SQL reaplica indice, tenant, membro, ACL,
+   documento pronto e risco de prompt.
+8. Antes de um provedor externo, identificadores reconhecidos viram marcadores locais.
+9. O gerador recebe apenas fontes autorizadas e marcadas; a API restaura os valores.
+10. Marcadores de citacao ausentes ou inventados produzem recusa segura.
+
+Cada consulta persiste indice, modelo, estrategia, candidatos, fontes enviadas, versao
+e SHA-256 do prompt e quantidade de valores protegidos. O hash prova qual template foi
+usado sem armazenar uma segunda copia do prompt nem expor raciocinio interno.
 
 ## Conversas e streaming seguro
 
@@ -93,9 +101,24 @@ erDiagram
 ## Avaliacao RAG
 
 Casos registram ground truth de termos e documentos e podem impor limites de latencia
-e custo. Execucoes persistem recall, precisao, MRR, p95, custo, modelo e provedor. A
-comparacao com uma baseline sinaliza quedas de qualidade acima de cinco pontos
-percentuais e aumentos materiais de desempenho ou custo.
+e custo. O `POST` apenas agenda o job e responde `202`. Workers reivindicam uma
+execucao com `FOR UPDATE SKIP LOCKED`, renovam lease, ignoram casos ja persistidos e
+atualizam progresso. Uma replica pode retomar lease vencida e o usuario pode solicitar
+cancelamento. Execucoes concluidas persistem recall, precisao, MRR, p95, custo, modelo
+e provedor. A comparacao com uma baseline sinaliza quedas de qualidade acima de cinco
+pontos percentuais e aumentos materiais de desempenho ou custo.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDENTE
+    PENDENTE --> EXECUTANDO: worker reivindica
+    EXECUTANDO --> EXECUTANDO: caso persistido + lease renovada
+    EXECUTANDO --> EXECUTANDO: outra replica retoma lease vencida
+    PENDENTE --> CANCELADA: cancelamento antes do inicio
+    EXECUTANDO --> CANCELADA: cancelamento cooperativo
+    EXECUTANDO --> CONCLUIDA: todos os casos
+    EXECUTANDO --> FALHOU: erro terminal
+```
 
 ## Reindexacao blue-green
 
@@ -117,6 +140,7 @@ estados na mesma transacao.
 ## Concorrencia e escala
 
 - ingestao e reindexacao usam `FOR UPDATE SKIP LOCKED`;
+- avaliacoes usam a mesma disciplina de fila, lease e resultado idempotente por caso;
 - leases vencidos sao retomados por outra instancia;
 - cada conversa possui uma lease propria e o SSE roda em virtual thread;
 - Redis executa um script Lua atomico para limites compartilhados;
@@ -132,6 +156,7 @@ estados na mesma transacao.
 - registro do documento e tarefa pertencem a uma transacao;
 - trechos, vetores do indice ativo e conclusao da tarefa sao atomicos;
 - respostas e citacoes sao persistidas juntas;
+- trace da consulta e salvo na mesma transacao da resposta e das citacoes;
 - cada par de mensagens e gravado atomicamente e retries reutilizam a consulta anterior;
 - retencao remove consultas e preserva resultados de avaliacao com referencia nula;
 - retencao remove conversas antes das consultas para nao preservar respostas pessoais;

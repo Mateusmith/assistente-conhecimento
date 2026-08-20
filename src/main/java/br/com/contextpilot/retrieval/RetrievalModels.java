@@ -55,6 +55,7 @@ public final class RetrievalModels {
             UUID indiceId,
             String modeloEmbedding,
             EstrategiaBusca estrategia,
+            int totalCandidatos,
             List<FonteRecuperada> fontes) {
     }
 

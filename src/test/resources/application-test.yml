@@ -23,6 +23,10 @@ contextpilot:
   reindexacao:
     atraso-inicial-ms: 600000
     intervalo-ms: 600000
+  avaliacoes:
+    tempo-lease: 30s
+    intervalo-worker-ms: 50
+    atraso-inicial-ms: 50
 
 management:
   health:

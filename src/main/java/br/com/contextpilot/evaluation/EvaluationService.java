@@ -3,6 +3,7 @@ package br.com.contextpilot.evaluation;
 import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -22,12 +23,14 @@ import br.com.contextpilot.evaluation.EvaluationModels.CriarCasoRequest;
 import br.com.contextpilot.evaluation.EvaluationModels.CriarConjuntoRequest;
 import br.com.contextpilot.evaluation.EvaluationModels.ExecucaoAvaliacao;
 import br.com.contextpilot.evaluation.EvaluationModels.ResultadoCaso;
+import br.com.contextpilot.evaluation.EvaluationModels.TrabalhoAvaliacao;
 import br.com.contextpilot.shared.domain.BusinessRuleException;
 import br.com.contextpilot.shared.domain.ResourceNotFoundException;
 import br.com.contextpilot.workspace.WorkspaceAccessService;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 
 @Service
 public class EvaluationService {
@@ -39,6 +42,7 @@ public class EvaluationService {
     private final EvaluationMetrics metricasAvaliacao;
     private final MeterRegistry metricas;
     private final Clock relogio;
+    private final Duration tempoLease;
 
     public EvaluationService(
             EvaluationRepository repositorio,
@@ -47,7 +51,8 @@ public class EvaluationService {
             AuditService auditoria,
             EvaluationMetrics metricasAvaliacao,
             MeterRegistry metricas,
-            Clock relogio) {
+            Clock relogio,
+            @Value("${contextpilot.avaliacoes.tempo-lease:5m}") Duration tempoLease) {
         this.repositorio = repositorio;
         this.acessoEspaco = acessoEspaco;
         this.respostas = respostas;
@@ -55,6 +60,7 @@ public class EvaluationService {
         this.metricasAvaliacao = metricasAvaliacao;
         this.metricas = metricas;
         this.relogio = relogio;
+        this.tempoLease = tempoLease;
     }
 
     @Transactional
@@ -99,6 +105,7 @@ public class EvaluationService {
         return repositorio.listarCasos(conjuntoId);
     }
 
+    @Transactional
     public ExecucaoAvaliacao executar(UUID espacoId, UUID conjuntoId, String usuarioId) {
         acessoEspaco.exigirCuradoria(espacoId, usuarioId);
         exigirConjunto(espacoId, conjuntoId);
@@ -108,24 +115,48 @@ public class EvaluationService {
         }
 
         UUID execucaoId = UUID.randomUUID();
-        repositorio.iniciarExecucao(execucaoId, conjuntoId, usuarioId, casos.size(), Instant.now(relogio));
+        repositorio.agendarExecucao(execucaoId, conjuntoId, usuarioId, casos.size(), Instant.now(relogio));
+        metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "agendada").increment();
+        auditoria.registrar(espacoId, usuarioId, "AVALIACAO_AGENDADA", "EXECUCAO_AVALIACAO",
+                execucaoId.toString(), Map.of("casos", casos.size()));
+        return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
+    }
+
+    void processar(TrabalhoAvaliacao trabalho, String trabalhadorId) {
+        UUID execucaoId = trabalho.execucaoId();
         try {
-            int aprovados = 0;
-            List<ResultadoCaso> resultados = new ArrayList<>();
-            String modeloEmbedding = null;
-            String provedorIa = null;
-            for (CasoAvaliacao caso : casos) {
-                RespostaRag resposta = respostas.perguntar(espacoId, caso.pergunta(), usuarioId);
+            acessoEspaco.exigirCuradoria(trabalho.espacoId(), trabalho.usuarioId());
+            List<CasoAvaliacao> casosPendentes = repositorio.listarCasosPendentes(
+                    trabalho.conjuntoId(), execucaoId);
+            for (CasoAvaliacao caso : casosPendentes) {
+                if (repositorio.cancelamentoSolicitado(execucaoId)) {
+                    repositorio.cancelarExecucao(execucaoId, trabalhadorId, Instant.now(relogio));
+                    metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "cancelada").increment();
+                    auditoria.registrar(trabalho.espacoId(), trabalho.usuarioId(), "AVALIACAO_CANCELADA",
+                            "EXECUCAO_AVALIACAO", execucaoId.toString(), Map.of());
+                    return;
+                }
+                repositorio.renovarLease(execucaoId, trabalhadorId, Instant.now(relogio).plus(tempoLease));
+                RespostaRag resposta = respostas.perguntar(
+                        trabalho.espacoId(), caso.pergunta(), trabalho.usuarioId());
                 ResultadoCaso resultado = avaliar(caso, resposta);
                 repositorio.salvarResultado(execucaoId, resultado);
-                resultados.add(resultado);
-                modeloEmbedding = resposta.modeloEmbedding();
-                provedorIa = resposta.provedorIa();
-                if (resultado.aprovado()) {
-                    aprovados++;
-                }
+                repositorio.registrarProgresso(execucaoId, trabalhadorId);
             }
-            double taxa = (double) aprovados / casos.size();
+
+            if (repositorio.cancelamentoSolicitado(execucaoId)) {
+                repositorio.cancelarExecucao(execucaoId, trabalhadorId, Instant.now(relogio));
+                metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "cancelada").increment();
+                return;
+            }
+            List<ResultadoCaso> resultados = repositorio.listarResultados(execucaoId);
+            int aprovados = (int) resultados.stream().filter(ResultadoCaso::aprovado).count();
+            RespostaRag ultimaResposta = resultados.isEmpty() ? null
+                    : respostas.buscar(trabalho.espacoId(), resultados.getLast().consultaId(), trabalho.usuarioId());
+            String modeloEmbedding = ultimaResposta == null ? null : ultimaResposta.modeloEmbedding();
+            String provedorIa = ultimaResposta == null ? null : ultimaResposta.provedorIa();
+            int totalCasos = resultados.size();
+            double taxa = totalCasos == 0 ? 0.0 : (double) aprovados / totalCasos;
             double recallMedio = media(resultados.stream().mapToDouble(ResultadoCaso::pontuacaoFontes).toArray());
             double precisaoMedia = media(resultados.stream().mapToDouble(ResultadoCaso::precisaoFontes).toArray());
             double mrrMedio = media(resultados.stream().mapToDouble(ResultadoCaso::mrr).toArray());
@@ -133,22 +164,37 @@ public class EvaluationService {
             BigDecimal custoTotal = resultados.stream().map(ResultadoCaso::custoUsd)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             repositorio.concluirExecucao(execucaoId, aprovados, taxa, recallMedio, precisaoMedia,
-                    mrrMedio, latenciaP95, custoTotal, modeloEmbedding, provedorIa, Instant.now(relogio));
+                    mrrMedio, latenciaP95, custoTotal, modeloEmbedding, provedorIa,
+                    Instant.now(relogio), trabalhadorId);
             metricasAvaliacao.registrar(taxa, recallMedio, precisaoMedia, mrrMedio, latenciaP95, custoTotal);
             metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "concluida").increment();
-            auditoria.registrar(espacoId, usuarioId, "AVALIACAO_EXECUTADA", "EXECUCAO_AVALIACAO",
-                    execucaoId.toString(), Map.of("casos", casos.size(), "aprovados", aprovados,
+            auditoria.registrar(trabalho.espacoId(), trabalho.usuarioId(), "AVALIACAO_EXECUTADA",
+                    "EXECUCAO_AVALIACAO", execucaoId.toString(), Map.of("casos", totalCasos, "aprovados", aprovados,
                             "taxa", taxa, "recall", recallMedio, "precisao", precisaoMedia, "mrr", mrrMedio));
-            return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
         } catch (RuntimeException excecao) {
             String erro = "Falha durante a avaliacao: " + excecao.getClass().getSimpleName();
-            repositorio.falharExecucao(execucaoId,
-                    erro, Instant.now(relogio));
+            repositorio.falharExecucao(execucaoId, erro, Instant.now(relogio), trabalhadorId);
             metricas.counter("contextpilot.avaliacao.execucoes", "resultado", "falhou").increment();
-            auditoria.registrar(espacoId, usuarioId, "AVALIACAO_FALHOU", "EXECUCAO_AVALIACAO",
+            auditoria.registrar(trabalho.espacoId(), trabalho.usuarioId(), "AVALIACAO_FALHOU", "EXECUCAO_AVALIACAO",
                     execucaoId.toString(), Map.of("erro", excecao.getClass().getSimpleName()));
-            return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
         }
+    }
+
+    @Transactional
+    public ExecucaoAvaliacao cancelar(
+            UUID espacoId,
+            UUID conjuntoId,
+            UUID execucaoId,
+            String usuarioId) {
+        acessoEspaco.exigirCuradoria(espacoId, usuarioId);
+        ExecucaoAvaliacao execucao = buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
+        if (!"PENDENTE".equals(execucao.estado()) && !"EXECUTANDO".equals(execucao.estado())) {
+            throw new BusinessRuleException("Somente execucao pendente ou em andamento pode ser cancelada.");
+        }
+        repositorio.solicitarCancelamento(execucaoId, Instant.now(relogio));
+        auditoria.registrar(espacoId, usuarioId, "CANCELAMENTO_AVALIACAO_SOLICITADO",
+                "EXECUCAO_AVALIACAO", execucaoId.toString(), Map.of());
+        return buscarExecucao(espacoId, conjuntoId, execucaoId, usuarioId);
     }
 
     public ExecucaoAvaliacao buscarExecucao(

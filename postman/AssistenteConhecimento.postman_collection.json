@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "84a98c0e-8812-49f7-a108-7dff55c66612",
     "name": "Assistente de Conhecimento API",
-    "description": "Fluxo completo 1.3: autenticacao com audiencia, ingestao segura, ACL, RAG citado, conversas idempotentes, SSE validado, avaliacao quantitativa, MCP, reindexacao, governanca e LGPD.",
+    "description": "Fluxo completo 1.4: autenticacao com audiencia, ingestao segura, ACL, RAG contextual e citado, rastreabilidade de prompt, conversas idempotentes, avaliacao assincrona, MCP, reindexacao, governanca e LGPD.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -135,7 +135,7 @@
             "body": {"mode": "raw", "raw": "{\"pergunta\":\"Qual e o prazo para solicitar reembolso?\"}"},
             "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/consultas"
           },
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('RAG respondeu', () => pm.response.to.have.status(200));", "pm.test('Resposta possui fonte verificavel', () => { const r = pm.response.json(); pm.expect(r.recusada).to.eql(false); pm.expect(r.resposta).to.include('[F1]'); pm.expect(r.fontes[0].documentoId).to.eql(pm.environment.get('documento_id')); });", "pm.environment.set('consulta_id', pm.response.json().consultaId);"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('RAG respondeu', () => pm.response.to.have.status(200));", "pm.test('Resposta possui fonte e rastro verificaveis', () => { const r = pm.response.json(); pm.expect(r.recusada).to.eql(false); pm.expect(r.resposta).to.include('[F1]'); pm.expect(r.fontes[0].documentoId).to.eql(pm.environment.get('documento_id')); pm.expect(r.versaoPrompt).to.be.a('string'); pm.expect(r.impressaoPrompt).to.have.lengthOf(64); pm.expect(r.candidatosRecuperados).to.be.at.least(1); pm.expect(r.fontesContexto).to.be.at.least(r.fontes.length); });", "pm.environment.set('consulta_id', pm.response.json().consultaId);"], "type": "text/javascript"}}]
         },
         {
           "name": "Registrar feedback",
@@ -175,12 +175,28 @@
         {
           "name": "Executar avaliacao base",
           "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Avaliacao concluida', () => pm.response.to.have.status(200));", "const r = pm.response.json();", "pm.test('Metricas perfeitas', () => { pm.expect(r.estado).to.eql('CONCLUIDA'); pm.expect(r.taxaAcerto).to.eql(1); pm.expect(r.recallMedio).to.eql(1); pm.expect(r.precisaoMedia).to.eql(1); pm.expect(r.mrrMedio).to.eql(1); });", "pm.environment.set('execucao_base_id', r.id);"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Avaliacao base agendada', () => pm.response.to.have.status(202));", "const r = pm.response.json();", "pm.test('Job retornou identificador', () => pm.expect(r.id).to.be.a('string'));", "pm.environment.set('execucao_base_id', r.id);", "pm.environment.set('poll_base', '0');"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Aguardar avaliacao base",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes/{{execucao_base_id}}"},
+          "event": [
+            {"listen": "prerequest", "script": {"exec": ["setTimeout(() => {}, 500);"], "type": "text/javascript"}},
+            {"listen": "test", "script": {"exec": ["pm.test('Consulta do job disponivel', () => pm.response.to.have.status(200));", "const r = pm.response.json();", "const tentativa = Number(pm.environment.get('poll_base') || 0) + 1;", "pm.environment.set('poll_base', String(tentativa));", "if (['PENDENTE', 'EXECUTANDO'].includes(r.estado) && tentativa < 40) { pm.execution.setNextRequest(pm.info.requestName); } else { pm.test('Avaliacao base concluida', () => pm.expect(r.estado).to.eql('CONCLUIDA')); pm.test('Metricas perfeitas', () => { pm.expect(r.taxaAcerto).to.eql(1); pm.expect(r.recallMedio).to.eql(1); pm.expect(r.precisaoMedia).to.eql(1); pm.expect(r.mrrMedio).to.eql(1); pm.expect(r.casosProcessados).to.eql(r.totalCasos); }); pm.environment.unset('poll_base'); }"], "type": "text/javascript"}}
+          ]
         },
         {
           "name": "Executar avaliacao atual",
           "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes"},
-          "event": [{"listen": "test", "script": {"exec": ["pm.test('Nova avaliacao concluida', () => pm.response.to.have.status(200));", "pm.environment.set('execucao_atual_id', pm.response.json().id);"], "type": "text/javascript"}}]
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Nova avaliacao agendada', () => pm.response.to.have.status(202));", "pm.environment.set('execucao_atual_id', pm.response.json().id);", "pm.environment.set('poll_atual', '0');"], "type": "text/javascript"}}]
+        },
+        {
+          "name": "Aguardar avaliacao atual",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{token_ana}}"}], "url": "{{base_url}}/api/v1/espacos/{{espaco_id}}/avaliacoes/{{conjunto_id}}/execucoes/{{execucao_atual_id}}"},
+          "event": [
+            {"listen": "prerequest", "script": {"exec": ["setTimeout(() => {}, 500);"], "type": "text/javascript"}},
+            {"listen": "test", "script": {"exec": ["pm.test('Consulta do job disponivel', () => pm.response.to.have.status(200));", "const r = pm.response.json();", "const tentativa = Number(pm.environment.get('poll_atual') || 0) + 1;", "pm.environment.set('poll_atual', String(tentativa));", "if (['PENDENTE', 'EXECUTANDO'].includes(r.estado) && tentativa < 40) { pm.execution.setNextRequest(pm.info.requestName); } else { pm.test('Avaliacao atual concluida', () => pm.expect(r.estado).to.eql('CONCLUIDA')); pm.environment.unset('poll_atual'); }"], "type": "text/javascript"}}
+          ]
         },
         {
           "name": "Comparar com baseline",

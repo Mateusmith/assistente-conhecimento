@@ -114,6 +114,78 @@ class HybridSearchRepository {
                 .list();
     }
 
+    List<FonteRecuperada> buscarVizinhos(
+            UUID espacoId,
+            UUID indiceId,
+            String usuarioId,
+            UUID documentoId,
+            int ordemInicial,
+            int ordemFinal,
+            String pergunta,
+            String embedding,
+            EstrategiaBusca estrategia) {
+        return banco.sql("""
+                        WITH acessiveis AS (
+                            SELECT t.id, t.documento_id, d.titulo, t.ordem, t.conteudo,
+                                   GREATEST(0.0, 1.0 - (v.embedding <=> CAST(:embedding AS vector))) AS semantica,
+                                   LEAST(1.0, ts_rank_cd(t.termos,
+                                       websearch_to_tsquery('portuguese', :pergunta), 32) * 4.0) AS textual
+                              FROM trechos_documento t
+                              JOIN documentos d ON d.id = t.documento_id
+                              JOIN vetores_trecho v ON v.trecho_id = t.id AND v.indice_id = :indiceId
+                             WHERE t.espaco_id = :espacoId
+                               AND t.documento_id = :documentoId
+                               AND t.ordem BETWEEN :ordemInicial AND :ordemFinal
+                               AND d.estado = 'PRONTO'
+                               AND t.risco_prompt = FALSE
+                               AND EXISTS (
+                                   SELECT 1 FROM membros_espaco m
+                                    WHERE m.espaco_id = d.espaco_id AND m.usuario_id = :usuarioId
+                               )
+                               AND (
+                                   d.visibilidade = 'ESPACO'
+                                   OR d.criado_por = :usuarioId
+                                   OR EXISTS (
+                                       SELECT 1 FROM membros_espaco m
+                                        WHERE m.espaco_id = d.espaco_id AND m.usuario_id = :usuarioId
+                                          AND m.papel = 'PROPRIETARIO'
+                                   )
+                                   OR EXISTS (
+                                       SELECT 1 FROM permissoes_documento p
+                                        WHERE p.documento_id = d.id AND p.usuario_id = :usuarioId
+                                   )
+                               )
+                        )
+                        SELECT id, documento_id, titulo, ordem, conteudo, semantica, textual,
+                               CASE :estrategia
+                                   WHEN 'SEMANTICA' THEN semantica
+                                   WHEN 'TEXTUAL' THEN textual
+                                   ELSE 0.70 * semantica + 0.30 * textual
+                               END AS pontuacao
+                          FROM acessiveis
+                         ORDER BY ordem
+                        """)
+                .param("embedding", embedding)
+                .param("pergunta", pergunta)
+                .param("indiceId", indiceId)
+                .param("espacoId", espacoId)
+                .param("documentoId", documentoId)
+                .param("ordemInicial", Math.max(0, ordemInicial))
+                .param("ordemFinal", Math.max(0, ordemFinal))
+                .param("usuarioId", usuarioId)
+                .param("estrategia", estrategia.name())
+                .query((rs, linha) -> new FonteRecuperada(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("documento_id", UUID.class),
+                        rs.getString("titulo"),
+                        rs.getInt("ordem"),
+                        rs.getString("conteudo"),
+                        rs.getDouble("semantica"),
+                        rs.getDouble("textual"),
+                        rs.getDouble("pontuacao")))
+                .list();
+    }
+
     private java.time.OffsetDateTime timestamp(Instant valor) {
         return valor == null ? null : SqlTime.instante(valor);
     }

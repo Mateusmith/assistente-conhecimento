@@ -23,9 +23,12 @@ regras de negocio:
 - documentos passam por ClamAV, MinIO/S3, SHA-256 e OCR real;
 - indices de embedding sao construidos blue-green e permitem rollback;
 - busca aceita metadados e compara estrategias hibrida, semantica e textual;
+- recuperacao contextual usa diversidade e trechos vizinhos sem relaxar ACL;
 - conversas preservam contexto sem compartilhar memoria entre usuarios;
 - streaming envia somente fontes e resposta ja validadas, nunca tokens crus;
-- avaliacao mede recall, precisao, MRR, p95 e custo contra uma baseline;
+- dados sensiveis sao tokenizados antes de chamar um provedor de IA externo;
+- avaliacao assincrona mede recall, precisao, MRR, p95 e custo contra uma baseline;
+- cada resposta registra versao e SHA-256 do prompt, indice e fontes de contexto;
 - Redis aplica limites e quotas compartilhados entre replicas;
 - tokens, custos, SLOs, alertas e tempo de ingestao sao observaveis;
 - exportacao, exclusao, pseudonimizacao e retencao apoiam operacoes LGPD;
@@ -115,8 +118,9 @@ Essas credenciais sao apenas locais.
 ```
 
 O script executa 23 etapas e prova ClamAV, S3, integridade, OCR, ACL, citacoes,
-conversa idempotente, streaming validado, avaliacao quantitativa, MCP, comparacao de
-busca, governanca, reindexacao blue-green, rollback e exportacao LGPD.
+RAG contextual, rastreabilidade, conversa idempotente, streaming validado, avaliacao
+assincrona, MCP, comparacao de busca, governanca, reindexacao blue-green, rollback e
+exportacao LGPD.
 
 ## Postman
 
@@ -136,8 +140,8 @@ npx --yes newman run postman/AssistenteConhecimento.postman_collection.json `
   -e postman/AssistenteConhecimento.postman_environment.json
 ```
 
-A colecao possui assercoes de ACL, fontes, conversas, idempotencia, armazenamento,
-avaliacao, MCP, reindexacao, uso e privacidade.
+A colecao possui assercoes de ACL, fontes, rastreabilidade, conversas, idempotencia,
+armazenamento, jobs de avaliacao, MCP, reindexacao, uso e privacidade.
 
 ## Exemplos da API
 
@@ -225,9 +229,15 @@ Resposta resumida:
   "consultaId": "c3acb68e-bbd5-46a9-b118-522bcf414469",
   "resposta": "Com base no conhecimento disponivel: O prazo e de 30 dias. [F1]",
   "recusada": false,
-  "provedorIa": "local-extrativo-v1",
+  "provedorIa": "local-extrativo-v2",
+  "indiceEmbeddingId": "72c01386-6583-450a-97e6-4adcd7d0c51a",
   "modeloEmbedding": "local-hashing-v1",
   "estrategiaBusca": "HIBRIDA",
+  "versaoPrompt": "extrativo-local-v2",
+  "impressaoPrompt": "d3416f5454a580b191823db7957edbd222fa0f4a04fa0cbecf474e3b968dbe6d",
+  "candidatosRecuperados": 4,
+  "fontesContexto": 2,
+  "dadosSensiveisProtegidos": 0,
   "tokensEntrada": 0,
   "tokensSaida": 0,
   "custoEstimadoUsd": 0,
@@ -287,7 +297,7 @@ Para progresso por SSE, envie o mesmo corpo para
 `POST .../mensagens/stream` com `Accept: text/event-stream`. Os eventos sao `etapa`,
 `fontes`, `resposta` e `concluido`; a resposta so aparece depois da validacao.
 
-### Avaliacao RAG 2.0
+### Avaliacao RAG assincrona
 
 ```json
 {
@@ -300,8 +310,11 @@ Para progresso por SSE, envie o mesmo corpo para
 }
 ```
 
-Cada execucao registra cobertura de termos, recall, precisao, MRR, p95, custo, modelo
-e provedor. Compare uma mudanca com a baseline em:
+Agende com `POST .../execucoes`. A API responde `202 Accepted` e estado `PENDENTE`.
+Consulte `GET .../execucoes/{execucaoId}` ate `CONCLUIDA`, `FALHOU` ou `CANCELADA`;
+`DELETE` no mesmo recurso solicita cancelamento. O progresso informa casos processados
+e total. Ao concluir, a execucao registra cobertura de termos, recall, precisao, MRR,
+p95, custo, modelo e provedor. Compare uma mudanca com a baseline em:
 
 ```http
 GET /api/v1/espacos/{espacoId}/avaliacoes/{conjuntoId}/execucoes/{atualId}/comparacoes/{baseId}
@@ -388,6 +401,7 @@ CONTEXT_PILOT_PROVEDOR_IA=openai
 OPENAI_API_KEY=sk-...
 CONTEXT_PILOT_MODELO_CHAT=gpt-5-mini
 CONTEXT_PILOT_MODELO_EMBEDDING=text-embedding-3-small
+AI_EXTERNAL_PII_PROTECTION=true
 AI_CHAT_INPUT_COST_PER_MILLION=0
 AI_CHAT_OUTPUT_COST_PER_MILLION=0
 AI_EMBEDDING_COST_PER_MILLION=0
@@ -395,7 +409,9 @@ AI_EMBEDDING_COST_PER_MILLION=0
 
 Preencha os tres custos conforme o contrato vigente. O projeto mantem zero por padrao
 para nao transformar preco antigo em telemetria enganosa. Tokens reais retornados pelo
-provedor continuam contabilizados.
+provedor continuam contabilizados. Com a protecao externa ativa, valores reconhecidos
+por padrao viram marcadores durante a chamada e sao restaurados somente na API. Esse
+controle reduz exposicao, mas nao substitui um DLP/NER corporativo.
 
 ## Escala horizontal
 
@@ -438,7 +454,7 @@ Controles adicionais:
 ## Observabilidade
 
 O dashboard provisionado cobre disponibilidade, p95, fila, leases, ingestao, OCR,
-antivirus, armazenamento, reindexacao, conversas, quotas, tokens e custo. Prometheus carrega
+antivirus, armazenamento, reindexacao, conversas, avaliacoes, quotas, tokens e custo. Prometheus carrega
 [regras de SLO e alerta](docker/prometheus/rules.yml), e cada alerta aponta para
 [runbooks](docs/runbooks).
 
@@ -454,10 +470,12 @@ A suite usa PostgreSQL/pgvector e MinIO reais via Testcontainers e cobre:
 - S3, hash, ClamAV, OCR, fragmentacao e embeddings;
 - API, metricas, OAuth2, tenant e ACL de documento;
 - metadados, tres estrategias e filtro cross-tenant;
+- MMR, diversidade, vizinhos contextuais e reaplicacao de ACL;
 - reindexacao v1 para v2 e rollback;
 - prompt injection, citacao falsa, cross-tenant e documento sem permissao;
 - memoria conversacional isolada, lease, idempotencia, SSE validado e audiencia JWT;
-- recall, precisao, MRR, orcamento e comparacao de execucoes RAG;
+- tokenizacao e restauracao de dados sensiveis no provedor externo;
+- jobs retomaveis, cancelamento, recall, precisao, MRR, orcamento e baseline RAG;
 - quotas, uso, exportacao e exclusao LGPD.
 
 O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCoCo em
@@ -467,6 +485,7 @@ O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCo
 
 - [Arquitetura](docs/ARCHITECTURE.md)
 - [Matriz de capacidades de IA](docs/AI-CAPABILITY-MATRIX.md)
+- [Decisoes de engenharia de IA](docs/AI-ENGINEERING-DECISIONS.md)
 - [Modelo de ameacas](docs/THREAT-MODEL.md)
 - [ADR 001: monolito modular](docs/adr/001-modular-monolith.md)
 - [ADR 002: ACL dentro da recuperacao](docs/adr/002-retrieval-authorization.md)
@@ -476,6 +495,8 @@ O relatorio adversarial fica em `target/adversarial-report.json`; cobertura JaCo
 - [ADR 006: governanca distribuida](docs/adr/006-distributed-governance.md)
 - [ADR 007: memoria conversacional segura](docs/adr/007-secure-conversational-memory.md)
 - [ADR 008: avaliacao RAG quantitativa](docs/adr/008-rag-evaluation-regression.md)
+- [ADR 009: RAG contextual e privado](docs/adr/009-private-contextual-rag.md)
+- [ADR 010: avaliacoes retomaveis](docs/adr/010-resumable-evaluation-jobs.md)
 - [Politica de seguranca](SECURITY.md)
 - [Como contribuir](CONTRIBUTING.md)
 - [Historico](CHANGELOG.md)

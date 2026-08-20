@@ -13,6 +13,7 @@ import br.com.contextpilot.shared.security.CurrentUser;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -58,8 +59,17 @@ public class EvaluationController {
     }
 
     @PostMapping("/{conjuntoId}/execucoes")
-    ExecucaoAvaliacao executar(@PathVariable UUID espacoId, @PathVariable UUID conjuntoId) {
-        return servico.executar(espacoId, conjuntoId, usuarioAtual.obterId());
+    ResponseEntity<ExecucaoAvaliacao> executar(@PathVariable UUID espacoId, @PathVariable UUID conjuntoId) {
+        return ResponseEntity.accepted().body(
+                servico.executar(espacoId, conjuntoId, usuarioAtual.obterId()));
+    }
+
+    @DeleteMapping("/{conjuntoId}/execucoes/{execucaoId}")
+    ExecucaoAvaliacao cancelar(
+            @PathVariable UUID espacoId,
+            @PathVariable UUID conjuntoId,
+            @PathVariable UUID execucaoId) {
+        return servico.cancelar(espacoId, conjuntoId, execucaoId, usuarioAtual.obterId());
     }
 
     @GetMapping("/{conjuntoId}/execucoes/{execucaoId}")
