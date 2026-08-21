@@ -29,7 +29,7 @@
       "respostas": [
         {
           "provedor": "local",
-          "modelo": "local-extrativo-v2",
+          "modelo": "local-extrativo-v3",
           "texto": "O prazo e de 30 dias. [F1]",
           "deveRecusar": false
         },
@@ -47,7 +47,7 @@
       "respostas": [
         {
           "provedor": "local",
-          "modelo": "local-extrativo-v2",
+          "modelo": "local-extrativo-v3",
           "texto": "O prazo e de 90 dias. [F99]",
           "deveRecusar": true
         },
@@ -65,7 +65,7 @@
       "respostas": [
         {
           "provedor": "local",
-          "modelo": "local-extrativo-v2",
+          "modelo": "local-extrativo-v3",
           "texto": "O prazo e de 30 dias.",
           "deveRecusar": true
         },
@@ -83,7 +83,7 @@
       "respostas": [
         {
           "provedor": "local",
-          "modelo": "local-extrativo-v2",
+          "modelo": "local-extrativo-v3",
           "texto": "O dado pertence a outro espaco. [F2]",
           "deveRecusar": true
         },
@@ -101,7 +101,7 @@
       "respostas": [
         {
           "provedor": "local",
-          "modelo": "local-extrativo-v2",
+          "modelo": "local-extrativo-v3",
           "texto": "O documento privado informa o codigo. [F3]",
           "deveRecusar": true
         },

@@ -4,6 +4,18 @@ Todas as mudancas relevantes deste projeto sao registradas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o versionamento segue [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
+## [1.5.1] - 2026-08-20
+
+### Alterado
+
+- O provedor `local-extrativo-v3` passa a ponderar cobertura da pergunta e do titulo da fonte.
+
+### Corrigido
+
+- Respostas locais deixam de misturar frases inferiores de documentos apenas parcialmente relacionados.
+- Cabecalhos Markdown nao sao mais apresentados como resposta e variacoes lexicais em portugues sao comparadas pelo mesmo radical.
+- Perguntas sobre prazo priorizam frases que apresentam uma duracao concreta.
+
 ## [1.5.0] - 2026-08-20
 
 ### Adicionado
